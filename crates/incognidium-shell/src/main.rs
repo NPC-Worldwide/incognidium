@@ -21,8 +21,7 @@ use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
 use incognidium_net::{
-    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, fetch_url_solving_challenges,
-    resolve_url,
+    fetch_bytes, fetch_bytes_with_referer, fetch_url, fetch_url_fast, resolve_url,
 };
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
@@ -34,8 +33,9 @@ use incognidium_devtools::{
 use incognidium_shell::engine_bridge::{take_pending_form_submission, FormSubmission};
 
 use incognidium_shell::{
-    collect_scripts, decode_and_downscale_image, encode_png_compressed,
-    propagate_canvas_background, resolve_styles_with_container_sizes, save_png_compressed,
+    collect_form_fields, collect_scripts, decode_and_downscale_image, encode_png_compressed,
+    input_value, propagate_canvas_background, resolve_styles_with_container_sizes,
+    save_png_compressed, set_input_value,
 };
 
 const DEFAULT_WIDTH: u32 = 1400;
@@ -152,6 +152,11 @@ struct App {
 
     // Scroll
     scroll_y: f32,
+    max_scroll_y: f32,
+
+    // Focused form control
+    focused_input: Option<incognidium_dom::NodeId>,
+    input_cursor: usize,
 
     // JS engine
     js_vm: murkiu_vm::Vm,
@@ -181,6 +186,11 @@ struct App {
 
     // User-configurable browser settings
     settings: Settings,
+
+    // Async initial page load. The window is created immediately with a
+    // placeholder page; a background thread performs the (possibly slow,
+    // challenge-solving) fetch and stashes the result here for the event loop.
+    pending_initial_load: Arc<Mutex<Option<Result<(String, String), String>>>>,
 
     // Async image loading
     pending_images: Arc<Mutex<Vec<(String, ImageData)>>>,
@@ -240,7 +250,12 @@ impl App {
         }
     }
 
-    fn new(initial_url: String, initial_html: String, settings: Settings) -> Self {
+    fn new(
+        initial_url: String,
+        initial_html: String,
+        settings: Settings,
+        pending_initial_load: Arc<Mutex<Option<Result<(String, String), String>>>>,
+    ) -> Self {
         App {
             html_content: initial_html,
             current_url: initial_url.clone(),
@@ -252,6 +267,9 @@ impl App {
             window: None,
             surface: None,
             scroll_y: 0.0,
+            max_scroll_y: 0.0,
+            focused_input: None,
+            input_cursor: 0,
             last_cursor: None,
             js_vm: murkiu_vm::Vm::new(),
             settings,
@@ -263,6 +281,7 @@ impl App {
             layout_dirty: true,
             last_layout_width: 0,
             devtools: None,
+            pending_initial_load,
             pending_images: Arc::new(Mutex::new(Vec::new())),
             images_loading: Arc::new(AtomicBool::new(false)),
             images_cancel: Arc::new(AtomicBool::new(false)),
@@ -336,7 +355,7 @@ impl App {
             return;
         }
 
-        match fetch_url_solving_challenges(&url_str) {
+        match incognidium_shell::fetch_solving_challenges_engine(&url_str) {
             Ok(mut resp) => {
                 // Follow a single <meta http-equiv="refresh"> redirect if the
                 // initial response is a redirector page (e.g. a language runtime
@@ -414,6 +433,73 @@ impl App {
         self.request_redraw();
     }
 
+    /// Apply a page that was already fetched (e.g. the initial load performed
+    /// on a background thread). This mirrors the post-fetch half of `navigate`
+    /// so the result is indistinguishable from a synchronous load.
+    fn apply_loaded_page(&mut self, url: String, body: String) {
+        self.html_content = body;
+        self.current_url = url.clone();
+        self.address_text = url.clone();
+        self.cursor_pos = self.address_text.len();
+        self.scroll_y = 0.0;
+        self.update_window_title();
+
+        // Replace the placeholder entry in history with the resolved URL.
+        if self.history_pos + 1 < self.history.len() {
+            self.history.truncate(self.history_pos + 1);
+        }
+        if let Some(last) = self.history.last_mut() {
+            *last = url.clone();
+        } else {
+            self.history.push(url.clone());
+        }
+        self.history_pos = self.history.len() - 1;
+        self.record_current_history();
+
+        self.js_modified_doc = None;
+        self.cached_layout = None;
+        self.external_css.clear();
+        let body_for_css = self.html_content.clone();
+        self.fetch_external_css(&url, &body_for_css);
+        self.execute_scripts();
+        self.layout_dirty = true;
+        self.status_message = None;
+
+        self.image_cache.clear();
+        self.render();
+        let css_for_images = self.external_css.clone();
+        let body_for_images = self.html_content.clone();
+        self.fetch_page_images_async(&url, &body_for_images, &css_for_images);
+        self.request_redraw();
+    }
+
+    /// Pick up the background initial-page fetch once it completes.
+    fn drain_pending_initial_load(&mut self) -> bool {
+        let result = {
+            let mut slot = self.pending_initial_load.lock().unwrap();
+            match slot.take() {
+                Some(r) => r,
+                None => return false,
+            }
+        };
+        match result {
+            Ok((url, body)) => self.apply_loaded_page(url, body),
+            Err(e) => {
+                self.html_content = format!(
+                    r#"<html><body><h1>Error</h1><p>Failed to load page</p><p>{}</p></body></html>"#,
+                    e
+                );
+                self.current_url = "about:blank".to_string();
+                self.address_text = self.current_url.clone();
+                self.cursor_pos = self.address_text.len();
+                self.status_message = None;
+                self.layout_dirty = true;
+                self.request_redraw();
+            }
+        }
+        true
+    }
+
     fn go_back(&mut self) {
         if self.history_pos > 0 {
             self.history_pos -= 1;
@@ -434,7 +520,7 @@ impl App {
         if self.show_local_page(url) {
             return;
         }
-        match fetch_url_solving_challenges(url) {
+        match incognidium_shell::fetch_solving_challenges_engine(url) {
             Ok(mut resp) => {
                 if let Some(target) = incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
                 {
@@ -791,12 +877,111 @@ impl App {
             );
             self.image_cache.extend(image_cache);
             self.js_modified_doc = Some(modified_doc);
-            // If the script requested a form submission (e.g. Reddit anti-bot
+            // If the script requested a form submission (e.g. an anti-bot
             // challenge), perform the HTTP POST and navigate to the result.
             if let Some(submission) = take_pending_form_submission() {
                 self.submit_form(&submission);
             }
         }
+    }
+
+    fn handle_input_key(&mut self, event: &KeyEvent) -> bool {
+        let node_id = match self.focused_input {
+            Some(id) => id,
+            None => return false,
+        };
+        let doc = match &mut self.js_modified_doc {
+            Some(d) => d,
+            None => {
+                self.focused_input = None;
+                return false;
+            }
+        };
+
+        match &event.logical_key {
+            Key::Named(NamedKey::Enter) => {
+                if let Some(form_id) = self.find_enclosing_form(node_id) {
+                    self.submit_dom_form(form_id);
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.focused_input = None;
+                self.request_redraw();
+                return true;
+            }
+            Key::Named(NamedKey::Backspace) => {
+                let value = input_value(doc, node_id);
+                if self.input_cursor > 0 {
+                    let mut chars: Vec<char> = value.chars().collect();
+                    chars.remove(self.input_cursor - 1);
+                    let new_value: String = chars.into_iter().collect();
+                    set_input_value(doc, node_id, &new_value);
+                    self.input_cursor -= 1;
+                    self.layout_dirty = true;
+                    self.render();
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Delete) => {
+                let value = input_value(doc, node_id);
+                let mut chars: Vec<char> = value.chars().collect();
+                if self.input_cursor < chars.len() {
+                    chars.remove(self.input_cursor);
+                    let new_value: String = chars.into_iter().collect();
+                    set_input_value(doc, node_id, &new_value);
+                    self.layout_dirty = true;
+                    self.render();
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                if self.input_cursor > 0 {
+                    self.input_cursor -= 1;
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                let value = input_value(doc, node_id);
+                if self.input_cursor < value.chars().count() {
+                    self.input_cursor += 1;
+                    self.request_redraw();
+                }
+                return true;
+            }
+            Key::Named(NamedKey::Home) => {
+                self.input_cursor = 0;
+                self.request_redraw();
+                return true;
+            }
+            Key::Named(NamedKey::End) => {
+                let value = input_value(doc, node_id);
+                self.input_cursor = value.chars().count();
+                self.request_redraw();
+                return true;
+            }
+            Key::Character(ref ch) if self.modifiers.is_empty() => {
+                let value = input_value(doc, node_id);
+                let mut chars: Vec<char> = value.chars().collect();
+                for c in ch.chars() {
+                    if c >= ' ' && c != '\x7f' {
+                        chars.insert(self.input_cursor.min(chars.len()), c);
+                        self.input_cursor += 1;
+                    }
+                }
+                let new_value: String = chars.into_iter().collect();
+                set_input_value(doc, node_id, &new_value);
+                self.layout_dirty = true;
+                self.render();
+                self.request_redraw();
+                return true;
+            }
+            _ => {}
+        }
+        false
     }
 
     fn submit_form(&mut self, submission: &FormSubmission) {
@@ -827,8 +1012,10 @@ impl App {
                         preview.replace('\n', " ")
                     );
                 }
-                // DEBUG: dump post-challenge HTML for analysis.
-                let _ = std::fs::write("/tmp/incognidium_reddit_after_challenge.html", &resp.body);
+                // Optionally log the post-challenge response body for analysis.
+                if std::env::var_os("INCOGNIDIUM_DUMP_CHALLENGE_HTML").is_some() {
+                    let _ = std::fs::write("/tmp/incognidium_after_challenge.html", &resp.body);
+                }
                 self.status_message = Some(format!("Form submission: HTTP {}", resp.status));
                 self.history.push(self.current_url.clone());
                 self.history_pos = self.history.len().saturating_sub(1);
@@ -920,6 +1107,16 @@ impl App {
             // pages using dark-only themes don't render as a black page.
             css_text = incognidium_shell::strip_dark_mode_media_queries(&css_text);
 
+            if std::env::var_os("INCOGNIDIUM_DUMP_CSS").is_some() {
+                eprintln!(
+                    "[render] css_text len={} flex_rule={} from_js_doc={}",
+                    css_text.len(),
+                    css_text.contains(".flex{display:flex"),
+                    self.js_modified_doc.is_some()
+                );
+                let _ = std::fs::write("/tmp/incognidium_render_css.css", &css_text);
+            }
+
             let stylesheet = parse_css(&css_text);
             // Load @font-face web fonts so text measurement and painting use
             // the fonts the page declares instead of the built-in fallbacks.
@@ -981,9 +1178,20 @@ impl App {
             None => return,
         };
 
-        // Flatten with current scroll offset (cheap) — logical coordinates
+        // Flatten with current scroll offset (cheap) — logical coordinates.
+        // The flatten pass also hoists high-z-index interactive overlays (e.g.
+        // modals rendered after a full-page background) into the viewport.
         let flat_boxes = flatten_layout(&cached.layout_root, 0.0, -self.scroll_y, &cached.styles);
         self.flat_boxes = flat_boxes.clone();
+
+        // Keep the allowed scroll range in sync with the laid-out page height
+        // so the user can always scroll to the actual content.
+        let page_height = cached.layout_root.height.max(0.0);
+        let viewport_height = height.saturating_sub(CHROME_HEIGHT) as f32;
+        self.max_scroll_y = (page_height - viewport_height).max(0.0);
+        if self.scroll_y > self.max_scroll_y {
+            self.scroll_y = self.max_scroll_y;
+        }
 
         // DEBUG: dump visible layout boxes for diagnosis
         {
@@ -1350,9 +1558,18 @@ impl App {
             let addr_y = MENU_BAR_HEIGHT as f32 + ADDR_BAR_TOP;
             // Address bar
             if x >= ADDR_BAR_LEFT && (addr_y..addr_y + ADDR_BAR_HEIGHT).contains(&y) {
+                let was_focused = self.address_focused;
                 self.address_focused = true;
-                self.address_all_selected = true;
-                self.cursor_pos = self.address_text.len();
+                if was_focused {
+                    // Already editing: place the caret at the click point instead
+                    // of re-selecting everything on every click.
+                    self.address_all_selected = false;
+                    self.cursor_pos = address_bar_cursor_index(&self.address_text, x, scale);
+                } else {
+                    // First focus: select the whole URL so typing replaces it.
+                    self.address_all_selected = true;
+                    self.cursor_pos = self.address_text.len();
+                }
                 self.request_redraw();
                 return;
             }
@@ -1362,25 +1579,26 @@ impl App {
             self.menu_active = None;
             self.menu_item_hover = None;
 
-            // Check for link clicks (y is relative to window, flat_boxes are relative to page)
+            // Check for link and form-control clicks (y is relative to window,
+            // flat_boxes are relative to page)
             let page_y = y - CHROME_HEIGHT as f32;
-            for fbox in &self.flat_boxes {
+            if let Some(fbox) = self.flat_box_at(x, page_y) {
                 if let Some(ref href) = fbox.link_href {
-                    if x >= fbox.x
-                        && x <= fbox.x + fbox.width
-                        && page_y >= fbox.y
-                        && page_y <= fbox.y + fbox.height
-                    {
-                        let resolved = match resolve_url(&self.current_url, href) {
-                            Ok(u) => u,
-                            Err(_) => href.clone(),
-                        };
-                        self.navigate(&resolved);
-                        return;
-                    }
+                    let resolved = match resolve_url(&self.current_url, href) {
+                        Ok(u) => u,
+                        Err(_) => href.clone(),
+                    };
+                    self.navigate(&resolved);
+                    return;
+                }
+
+                if self.try_focus_or_submit_form_control(fbox.node_id) {
+                    return;
                 }
             }
 
+            // Clicking blank page area unfocuses any active input.
+            self.focused_input = None;
             self.request_redraw();
         }
     }
@@ -1395,11 +1613,16 @@ impl App {
         if self.handle_menu_keys(event) {
             return;
         }
+        if !self.address_focused && self.focused_input.is_some() {
+            if self.handle_input_key(event) {
+                return;
+            }
+        }
         if !self.address_focused {
             // Page scrolling
             match &event.logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
-                    self.scroll_y += 40.0;
+                    self.scroll_y = (self.scroll_y + 40.0).min(self.max_scroll_y);
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::ArrowUp) => {
@@ -1407,11 +1630,15 @@ impl App {
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::PageDown) => {
-                    self.scroll_y += 400.0;
+                    self.scroll_y = (self.scroll_y + 400.0).min(self.max_scroll_y);
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::PageUp) => {
                     self.scroll_y = (self.scroll_y - 400.0).max(0.0);
+                    self.request_redraw();
+                }
+                Key::Named(NamedKey::End) => {
+                    self.scroll_y = self.max_scroll_y;
                     self.request_redraw();
                 }
                 Key::Named(NamedKey::Home) => {
@@ -1561,8 +1788,38 @@ impl App {
     }
 
     fn handle_scroll(&mut self, delta_y: f32) {
-        self.scroll_y = (self.scroll_y - delta_y * 30.0).max(0.0);
+        self.scroll_y = (self.scroll_y - delta_y * 30.0).clamp(0.0, self.max_scroll_y);
         self.request_redraw();
+    }
+
+    /// Return the flat box that encloses the given page-local point, preferring
+    /// interactive controls and links over plain containers.
+    fn flat_box_at(&self, page_x: f32, page_y: f32) -> Option<&incognidium_layout::FlatBox> {
+        let mut best: Option<&incognidium_layout::FlatBox> = None;
+        for fbox in &self.flat_boxes {
+            let hit = page_x >= fbox.x
+                && page_x <= fbox.x + fbox.width
+                && page_y >= fbox.y
+                && page_y <= fbox.y + fbox.height;
+            if !hit {
+                continue;
+            }
+            let interactive = fbox.input_type.is_some()
+                || fbox
+                    .link_href
+                    .as_deref()
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+            let replace = match best {
+                None => true,
+                Some(b) if interactive && b.input_type.is_none() && b.link_href.is_none() => true,
+                _ => false,
+            };
+            if replace {
+                best = Some(fbox);
+            }
+        }
+        best
     }
 
     fn find_hover_url(&self, phys_x: f64, phys_y: f64) -> Option<String> {
@@ -1609,6 +1866,134 @@ impl App {
             }
             self.request_redraw();
         }
+    }
+
+    /// Focus or activate the form control at `node_id`.
+    ///
+    /// - Text/password/textarea inputs become the focused control.
+    /// - Button and submit clicks submit the containing form.
+    /// - Label clicks focus the associated control.
+    fn try_focus_or_submit_form_control(&mut self, node_id: incognidium_dom::NodeId) -> bool {
+        let doc = match &self.js_modified_doc {
+            Some(d) => d,
+            None => return false,
+        };
+        let node = match doc.nodes.get(node_id) {
+            Some(n) => n,
+            None => return false,
+        };
+        let el = match &node.data {
+            incognidium_dom::NodeData::Element(e) => e,
+            _ => return false,
+        };
+
+        if el.tag_name == "label" {
+            if let Some(for_id) = el
+                .get_attr("for")
+                .and_then(|v| Self::find_node_by_id_static(doc, v))
+            {
+                return self.try_focus_or_submit_form_control(for_id);
+            }
+            return false;
+        }
+
+        let is_text_input = el.tag_name == "input"
+            && matches!(
+                el.get_attr("type").as_deref().unwrap_or("text"),
+                "text" | "password" | "email" | "search" | "url" | "tel"
+            );
+        let is_textarea = el.tag_name == "textarea";
+
+        if is_text_input || is_textarea {
+            self.focused_input = Some(node_id);
+            let value = input_value(doc, node_id);
+            self.input_cursor = value.chars().count();
+            self.request_redraw();
+            return true;
+        }
+
+        let is_button = el.tag_name == "button"
+            || (el.tag_name == "input"
+                && matches!(
+                    el.get_attr("type").as_deref().unwrap_or("submit"),
+                    "button" | "submit" | "reset"
+                ));
+
+        if is_button {
+            if let Some(form_id) = self.find_enclosing_form(node_id) {
+                self.submit_dom_form(form_id);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Find the first element in `doc` with `id == target_id`.
+    fn find_node_by_id_static(
+        doc: &incognidium_dom::Document,
+        target_id: &str,
+    ) -> Option<incognidium_dom::NodeId> {
+        for (id, node) in doc.nodes.iter().enumerate() {
+            if let incognidium_dom::NodeData::Element(el) = &node.data {
+                if el.get_attr("id").as_deref() == Some(target_id) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Walk up the DOM from `node_id` to find the nearest ancestor `<form>`.
+    fn find_enclosing_form(
+        &self,
+        node_id: incognidium_dom::NodeId,
+    ) -> Option<incognidium_dom::NodeId> {
+        let doc = self.js_modified_doc.as_ref()?;
+        let mut current = node_id;
+        while let Some(node) = doc.nodes.get(current) {
+            if let incognidium_dom::NodeData::Element(el) = &node.data {
+                if el.tag_name == "form" {
+                    return Some(current);
+                }
+            }
+            let parent = node.parent?;
+            if parent == current {
+                break;
+            }
+            current = parent;
+        }
+        None
+    }
+
+    /// Build a `FormSubmission` from a `\u003cform\u003e` element in the live DOM and
+    /// submit it through the shared network path.
+    fn submit_dom_form(&mut self, form_id: incognidium_dom::NodeId) {
+        let doc = match &self.js_modified_doc {
+            Some(d) => d,
+            None => return,
+        };
+        let (action, method) = match doc.nodes.get(form_id) {
+            Some(n) => match &n.data {
+                incognidium_dom::NodeData::Element(el) => (
+                    el.get_attr("action").unwrap_or("").to_string(),
+                    el.get_attr("method").unwrap_or("get").to_string(),
+                ),
+                _ => return,
+            },
+            None => return,
+        };
+
+        let mut fields: Vec<(String, String)> = Vec::new();
+        collect_form_fields(doc, form_id, &mut fields);
+
+        let submission = FormSubmission {
+            action,
+            method,
+            fields,
+        };
+        self.submit_form(&submission);
+        self.focused_input = None;
     }
 
     fn focus_address_bar(&mut self) {
@@ -2296,6 +2681,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Apply the initial page once its background fetch completes.
+        if self.drain_pending_initial_load() {
+            self.request_redraw();
+        }
         // Check for images arriving from background fetch
         if self.drain_pending_images() {
             self.request_redraw();
@@ -2844,6 +3233,29 @@ fn draw_insecure_icon(pixmap: &mut Pixmap, cx: f32, cy: f32, s: f32) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Map a click x-coordinate (logical px) inside the address bar to the nearest
+/// character index in `text`, accounting for the leading lock icon and padding.
+fn address_bar_cursor_index(text: &str, click_x: f32, scale: f32) -> usize {
+    // Matches draw_address_bar: text starts at ADDR_BAR_LEFT + pad + icon_w.
+    let pad = 6.0;
+    let icon_w = 22.0;
+    let text_start = ADDR_BAR_LEFT + pad + icon_w;
+    let rel = (click_x - text_start).max(0.0);
+    if rel <= 0.0 {
+        return 0;
+    }
+    let px_per_scaled = if scale > 0.0 { scale } else { 1.0 };
+    let mut acc = 0.0f32;
+    for (i, ch) in text.chars().enumerate() {
+        let adv = measure_toolbar_text(&ch.to_string(), scale) / px_per_scaled;
+        if acc + adv / 2.0 >= rel {
+            return i;
+        }
+        acc += adv;
+    }
+    text.chars().count()
+}
+
 fn draw_address_bar(
     pixmap: &mut Pixmap,
     x: f32,
@@ -3670,6 +4082,22 @@ const MENU_BAR: &[(&str, &[&str])] = &[
     ("Help", &["About"]),
 ];
 
+/// Minimal HTML text escaping for the initial-loading placeholder.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn main() {
     env_logger::init();
 
@@ -3679,55 +4107,64 @@ fn main() {
     let bookmarks = load_bookmarks();
     let history = load_history();
 
-    // Parse URL arg (skip --mcp)
-    let url_arg = args.iter().skip(1).find(|a| *a != "--mcp");
-    let (initial_url, initial_html) = if let Some(input) = url_arg {
-        let ud = incognidium_chrome::UserData {
-            settings: settings.clone(),
-            bookmarks: bookmarks.clone(),
-            history: history.clone(),
-        };
-        if let Some(html) = build_local_page(input, &ud, None) {
-            (input.clone(), html)
-        } else {
-            match fetch_url_solving_challenges(input) {
-                Ok(resp) => (resp.url, resp.body),
-                Err(e) => {
-                    eprintln!("Failed to load {input}: {e}");
-                    (
-                        "about:blank".into(),
-                        build_local_page("about:blank", &ud, None)
-                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
-                    )
-                }
-            }
-        }
+    // Parse URL arg (skip --mcp). Default to the configured homepage.
+    let url_arg = args
+        .iter()
+        .skip(1)
+        .find(|a| *a != "--mcp")
+        .cloned()
+        .unwrap_or_else(|| settings.homepage.clone());
+
+    let ud = incognidium_chrome::UserData {
+        settings: settings.clone(),
+        bookmarks: bookmarks.clone(),
+        history: history.clone(),
+    };
+
+    // Open the window *immediately*. If the target is a local page we build it
+    // inline; otherwise we show a lightweight placeholder and fetch the real
+    // page on a background thread (challenge solving can take many seconds).
+    let (initial_url, initial_html, pending_initial_load) = if let Some(html) =
+        build_local_page(&url_arg, &ud, None)
+    {
+        let slot: Arc<Mutex<Option<Result<(String, String), String>>>> = Arc::new(Mutex::new(None));
+        (url_arg.clone(), html, slot)
     } else {
-        let home = settings.homepage.clone();
-        let ud = incognidium_chrome::UserData {
-            settings: settings.clone(),
-            bookmarks: bookmarks.clone(),
-            history: history.clone(),
-        };
-        if let Some(html) = build_local_page(&home, &ud, None) {
-            (home, html)
-        } else {
-            match fetch_url_solving_challenges(&home) {
-                Ok(resp) => (resp.url, resp.body),
-                Err(e) => {
-                    eprintln!("Failed to load homepage {home}: {e}");
-                    (
-                        "about:blank".into(),
-                        build_local_page("about:blank", &ud, None)
-                            .unwrap_or_else(|| "<html><body></body></html>".to_string()),
-                    )
+        let placeholder = format!(
+            r#"<html><head><meta charset="utf-8"></head><body style="font-family:sans-serif;padding:24px;color:#555"><p>Loading {url}…</p></body></html>"#,
+            url = html_escape(&url_arg)
+        );
+        let slot: Arc<Mutex<Option<Result<(String, String), String>>>> = Arc::new(Mutex::new(None));
+        let slot_thread = Arc::clone(&slot);
+        let target = url_arg.clone();
+        // Prime the event loop to poll until the fetch lands: the thread
+        // stores the result; about_to_wait drains it and re-renders.
+        std::thread::spawn(move || {
+            let result = match incognidium_shell::fetch_solving_challenges_engine(&target) {
+                Ok(mut resp) => {
+                    if let Some(next) =
+                        incognidium_shell::meta_refresh_target(&resp.body, &resp.url)
+                    {
+                        if let Ok(redirect) = fetch_url(&next) {
+                            resp = redirect;
+                        }
+                    }
+                    Ok((resp.url, resp.body))
                 }
-            }
-        }
+                Err(e) => Err(e),
+            };
+            *slot_thread.lock().unwrap() = Some(result);
+        });
+        (url_arg.clone(), placeholder, slot)
     };
 
     let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App::new(initial_url, initial_html, settings.clone());
+    let mut app = App::new(
+        initial_url,
+        initial_html,
+        settings.clone(),
+        pending_initial_load,
+    );
 
     if mcp_mode {
         let proxy = event_loop.create_proxy();

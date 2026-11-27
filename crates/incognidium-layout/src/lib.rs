@@ -2289,7 +2289,18 @@ fn build_layout_tree(
             || el.tag_name == "meter"
     );
     if !skip_children {
-        for &child_id in &node.children {
+        // Compose shadow-root children before light-DOM children so custom
+        // elements rendered into their shadow tree are laid out and visible.
+        let mut child_ids: Vec<NodeId> = Vec::new();
+        if let NodeData::Element(el) = &node.data {
+            if let Some(shadow_id) = el.shadow_root {
+                if let Some(shadow) = doc.nodes.get(shadow_id) {
+                    child_ids.extend(&shadow.children);
+                }
+            }
+        }
+        child_ids.extend(&node.children);
+        for &child_id in &child_ids {
             if !visited.insert(child_id) {
                 continue;
             }
@@ -16762,7 +16773,7 @@ pub fn flatten_layout(
     styles: &StyleMap,
 ) -> Vec<FlatBox> {
     let viewport = VIEWPORT_SIZE.with(|v| v.get());
-    let boxes = flatten_with_clip(
+    let mut boxes = flatten_with_clip(
         layout_box,
         offset_x,
         offset_y,
@@ -16779,6 +16790,7 @@ pub fn flatten_layout(
         false,
         (0.0, 0.0, viewport.0, viewport.1),
     );
+    hoist_top_layer_overlays(&mut boxes, styles, viewport.0, viewport.1);
     boxes
 }
 
@@ -17388,6 +17400,163 @@ fn flatten_with_clip(
     }
 
     result
+}
+
+/// Hoist high-z-index, interactive in-flow boxes into the viewport.
+///
+/// Many client-rendered apps render a full-page background (feed, marketing
+/// hero, etc.) and then append a login/sign-up modal as a normal-flow sibling
+/// with `position: relative; z-index: 1000+`. Without JS-driven positioning
+/// the modal ends up below the fold. This pass detects such candidates and
+/// repositions them to the top of the viewport, collapsing the gap they
+/// left behind so the visible page starts with the overlay.
+///
+/// Criteria are intentionally conservative and avoid class-name checks:
+/// - positioned (relative/absolute/fixed/sticky) with an explicit z-index;
+/// - z-index is at least 100 (above typical chrome but below one-off widgets);
+/// - contains at least one interactive descendant (input/button/link);
+/// - not already fixed/absolute (those are handled by normal flattening);
+/// - currently placed below the viewport's top, i.e. not already visible.
+fn hoist_top_layer_overlays(
+    boxes: &mut Vec<FlatBox>,
+    styles: &StyleMap,
+    _viewport_width: f32,
+    viewport_height: f32,
+) {
+    if boxes.is_empty() {
+        return;
+    }
+
+    // Precompute which flat boxes are interactive.
+    let interactive: Vec<bool> = boxes
+        .iter()
+        .map(|b| {
+            b.input_type.is_some()
+                || !b.link_href.as_deref().unwrap_or("").is_empty()
+                    && b.text
+                        .as_deref()
+                        .map(|t| !t.trim().is_empty())
+                        .unwrap_or(false)
+        })
+        .collect();
+
+    let mut candidate_indices: Vec<usize> = Vec::new();
+    for (i, b) in boxes.iter().enumerate() {
+        let style = style_ref(styles, b.node_id);
+        if style.position == Position::Fixed || style.position == Position::Absolute {
+            continue;
+        }
+        let z = match style.z_index {
+            Some(n) => n,
+            None => continue,
+        };
+        if z < 100 {
+            continue;
+        }
+        if b.y <= 1.0 {
+            continue;
+        }
+        if b.width <= 0.0 || b.height <= 0.0 {
+            continue;
+        }
+        if !matches!(
+            b.box_type,
+            BoxType::Block | BoxType::Flex | BoxType::InlineBlock | BoxType::InlineFlex
+        ) {
+            continue;
+        }
+        candidate_indices.push(i);
+    }
+
+    if candidate_indices.is_empty() {
+        return;
+    }
+
+    // For each candidate, decide whether it has interactive descendants.
+    // Because flattening emits a box before its descendants, descendants are
+    // contiguous after the candidate until the next sibling at the same level.
+    // We approximate that by scanning forward while boxes remain geometrically
+    // inside the candidate's bounding box plus a small margin.
+    let mut promotions: Vec<(usize, f32)> = Vec::new();
+    for &idx in &candidate_indices {
+        let cb = &boxes[idx];
+        let margin = 4.0;
+        let min_x = cb.x - margin;
+        let max_x = cb.x + cb.width + margin;
+        let min_y = cb.y - margin;
+        let max_y = cb.y + cb.height + margin;
+
+        let mut has_interactive_descendant = false;
+        for j in (idx + 1)..boxes.len() {
+            let db = &boxes[j];
+            if db.x < min_x || db.x + db.width > max_x || db.y < min_y || db.y + db.height > max_y {
+                continue;
+            }
+            if interactive[j] {
+                has_interactive_descendant = true;
+                break;
+            }
+        }
+
+        if !has_interactive_descendant {
+            continue;
+        }
+
+        // Center the overlay vertically in the page area, but keep its top
+        // at least a little below the very top so it doesn't hide under the
+        // fixed chrome. If it's taller than the viewport, start at the top.
+        let top = if cb.height > viewport_height * 0.85 {
+            0.0
+        } else {
+            ((viewport_height - cb.height) / 2.0).max(0.0)
+        };
+        let delta = top - cb.y;
+        promotions.push((idx, delta));
+    }
+
+    if promotions.is_empty() {
+        return;
+    }
+
+    // Apply promotions from bottom to top so earlier indices stay valid.
+    promotions.sort_by_key(|p| std::cmp::Reverse(p.0));
+    for (idx, delta) in promotions {
+        let cb = &boxes[idx];
+        let margin = 4.0;
+        let min_x = cb.x - margin;
+        let max_x = cb.x + cb.width + margin;
+        let min_y = cb.y - margin;
+        let max_y = cb.y + cb.height + margin;
+        let old_y = cb.y;
+
+        // Find the contiguous range of boxes that belong to the overlay.
+        let mut end = idx + 1;
+        while end < boxes.len() {
+            let b = &boxes[end];
+            if b.x < min_x || b.x + b.width > max_x || b.y < min_y || b.y + b.height > max_y {
+                break;
+            }
+            end += 1;
+        }
+
+        // Move the overlay and all of its descendants by delta.
+        for j in idx..end {
+            boxes[j].y += delta;
+            if let Some((cx, cy, cw, ch)) = boxes[j].clip {
+                boxes[j].clip = Some((cx, cy + delta, cw, ch));
+            }
+        }
+
+        // Collapse the vacated vertical gap for all later boxes so the page
+        // height shrinks and the content below the overlay moves up.
+        let collapse = old_y; // distance from top to the overlay's old position
+        for j in end..boxes.len() {
+            boxes[j].y -= collapse;
+            if let Some((cx, cy, cw, ch)) = boxes[j].clip {
+                boxes[j].clip = Some((cx, cy - collapse, cw, ch));
+            }
+        }
+    }
 }
 
 /// Apply a CSS transform list to a set of flat-box positions.
@@ -18266,6 +18435,87 @@ mod tests {
 
         let flat = flatten_layout(&root, 0.0, 0.0, &styles);
         assert!(!flat.is_empty());
+    }
+
+    #[test]
+    fn test_top_layer_overlay_hoisting() {
+        // Simulate a feed page with a login modal appended as a normal-flow
+        // sibling. The modal has position:relative and a high z-index. Without
+        // hoisting it would sit below the fold; the pass should pull it up.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        // Full-viewport background block
+        let mut bg = ElementData::new("div");
+        bg.set_attr("style", "height: 800px; width: 100%;");
+        let bg_id = doc.add_node(body, NodeData::Element(bg));
+        let _bg_text = doc.add_node(
+            bg_id,
+            NodeData::Text(TextData {
+                content: "background".to_string(),
+            }),
+        );
+        // Modal container with high z-index and interactive content
+        let mut modal = ElementData::new("div");
+        modal.set_attr("style", "position: relative; z-index: 1001; width: 100%;");
+        let modal_id = doc.add_node(body, NodeData::Element(modal));
+        let mut input = ElementData::new("input");
+        input.set_attr("type", "email");
+        let _input_id = doc.add_node(modal_id, NodeData::Element(input));
+
+        let stylesheet = incognidium_css::parse_css("");
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 800.0, 600.0);
+        let root = layout(&doc, &styles, 800.0, 600.0);
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
+
+        let modal_box = flat
+            .iter()
+            .find(|b| b.node_id == modal_id)
+            .expect("modal box exists");
+        // The modal should have been hoisted into the viewport, not left at y=800.
+        assert!(
+            modal_box.y < 600.0,
+            "modal should be inside viewport, got y={}",
+            modal_box.y
+        );
+        assert!(modal_box.y >= 0.0, "modal should not be above viewport");
+    }
+
+    #[test]
+    fn test_top_layer_overlay_does_not_hoist_low_z_index() {
+        // A normal in-flow card with a link should not be hoisted.
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let mut card = ElementData::new("div");
+        card.set_attr("style", "position: relative; z-index: 5;");
+        let card_id = doc.add_node(body, NodeData::Element(card));
+        let mut a = ElementData::new("a");
+        a.set_attr("href", "https://example.com");
+        let a_id = doc.add_node(card_id, NodeData::Element(a));
+        let _text = doc.add_node(
+            a_id,
+            NodeData::Text(TextData {
+                content: "link".to_string(),
+            }),
+        );
+
+        let stylesheet = incognidium_css::parse_css("");
+        let styles = incognidium_style::resolve_styles(&doc, &stylesheet, 800.0, 600.0);
+        let root = layout(&doc, &styles, 800.0, 600.0);
+        let flat = flatten_layout(&root, 0.0, 0.0, &styles);
+
+        let card_box = flat
+            .iter()
+            .find(|b| b.node_id == card_id)
+            .expect("card box exists");
+        // Low-z-index in-flow boxes must stay in normal flow (near the top due
+        // to the default body margin), not be hoisted to the viewport center.
+        assert!(
+            card_box.y < 20.0,
+            "low-z card stayed in flow at y={}",
+            card_box.y
+        );
     }
 
     #[test]

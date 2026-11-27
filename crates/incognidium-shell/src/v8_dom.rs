@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, Once};
 use base64::Engine;
 use incognidium_dom::*;
 use incognidium_html::parse_html;
-use incognidium_net::FetchRequest;
+use incognidium_net::{register_blob_url, FetchRequest};
+use uuid::Uuid;
+
 /// Pending form submission produced by `HTMLFormElement.requestSubmit()`.
 #[derive(Debug, Clone)]
 pub struct FormSubmission {
@@ -141,6 +143,11 @@ thread_local! {
     static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Track URLs for dynamically loaded scripts so we don't execute the same file twice.
     static LOADED_SCRIPTS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Registry for ES modules loaded via dynamic `import()`. Maps a resolved
+    /// module URL to the JS object that holds its exports. This lets code-split
+    /// bundles expose real values instead of empty placeholder modules.
+    static MODULE_REGISTRY: RefCell<HashMap<String, v8::Global<v8::Object>>> =
+        RefCell::new(HashMap::new());
     /// Depth guard to prevent runaway recursion from scripts that insert scripts.
     static DYNAMIC_SCRIPT_DEPTH: RefCell<usize> = const { RefCell::new(0) };
     /// Layout metrics populated by the embedding shell so JS geometry getters
@@ -155,6 +162,25 @@ thread_local! {
     static WINDOW_EVENT_LISTENERS: RefCell<
         HashMap<String, Vec<v8::Global<v8::Function>>>,
     > = RefCell::new(HashMap::new());
+    /// Element event listeners registered through addEventListener and fired by
+    /// dynamic script lifecycle dispatches. Stored as real V8 function globals
+    /// keyed by node id and event type so `load` listeners on <script> elements
+    /// actually run after the script body executes.
+    static ELEMENT_EVENT_LISTENERS: RefCell<
+        HashMap<NodeId, HashMap<String, Vec<v8::Global<v8::Function>>>>,
+    > = RefCell::new(HashMap::new());
+    /// Current document.readyState. The value is a Rust-managed string because
+    /// the engine must transition it from loading → interactive → complete and
+    /// fire readystatechange listeners at each transition.
+    static DOCUMENT_READY_STATE: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Document-level event listeners registered through document.addEventListener
+    /// for lifecycle events such as readystatechange and DOMContentLoaded.
+    static DOCUMENT_EVENT_LISTENERS: RefCell<
+        HashMap<String, Vec<v8::Global<v8::Function>>>,
+    > = RefCell::new(HashMap::new());
+    /// Inline document.onreadystatechange handler. Stored separately so the
+    /// engine can fire it when readyState transitions.
+    static DOCUMENT_ONREADYSTATECHANGE: RefCell<Option<v8::Global<v8::Function>>> = RefCell::new(None);
     /// Viewport dimensions used for window.innerWidth/innerHeight and matchMedia.
     /// Set per page execution so JS viewport detection matches the layout viewport.
     static VIEWPORT_SIZE: RefCell<(f32, f32)> = const { RefCell::new((1024.0, 768.0)) };
@@ -174,6 +200,163 @@ fn clear_timeout_queue() {
 
 fn clear_window_event_listeners() {
     WINDOW_EVENT_LISTENERS.with(|m| m.borrow_mut().clear());
+    ELEMENT_EVENT_LISTENERS.with(|m| m.borrow_mut().clear());
+    DOCUMENT_EVENT_LISTENERS.with(|m| m.borrow_mut().clear());
+    DOCUMENT_ONREADYSTATECHANGE.with(|m| *m.borrow_mut() = None);
+    DOCUMENT_READY_STATE.with(|s| *s.borrow_mut() = "loading".to_string());
+}
+
+/// Set `document.readyState` to `value` and dispatch a `readystatechange` event
+/// if the state actually changed. The document's `onreadystatechange` property
+/// and `addEventListener('readystatechange')` listeners are both honored.
+fn set_document_ready_state(scope: &mut v8::HandleScope, value: &str) {
+    let changed = DOCUMENT_READY_STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let changed = s.as_str() != value;
+        if changed {
+            *s = value.to_string();
+        }
+        changed
+    });
+    if changed {
+        dispatch_document_event(scope, "readystatechange");
+        // Some scripts register on window instead of document; keep the window
+        // registry path alive as well.
+        dispatch_window_event(scope, "readystatechange");
+    }
+}
+
+/// Fire document-level listeners for an event. Supports both
+/// `addEventListener` and legacy `on*` properties.
+fn dispatch_document_event(scope: &mut v8::HandleScope, event_type: &str) {
+    let doc = match document_obj(scope) {
+        Some(d) => d,
+        None => {
+            eprintln!(
+                "[JS] dispatch_document_event {}: no document object",
+                event_type
+            );
+            return;
+        }
+    };
+    let doc_val: v8::Local<v8::Value> = doc.into();
+    let listeners: Vec<v8::Global<v8::Function>> =
+        DOCUMENT_EVENT_LISTENERS.with(|m| m.borrow().get(event_type).cloned().unwrap_or_default());
+    let inline = DOCUMENT_ONREADYSTATECHANGE.with(|m| m.borrow().as_ref().cloned());
+    if listeners.is_empty() && inline.is_none() {
+        return;
+    }
+    let event = v8::Object::new(scope);
+    set_str(scope, event, "type", event_type);
+    set_str(scope, event, "target", "#document");
+    let current_target_key = v8_str(scope, "currentTarget");
+    let _ = event.set(scope, current_target_key.into(), doc_val);
+    let ev_val: v8::Local<v8::Value> = event.into();
+    for cb_global in listeners {
+        let cb = v8::Local::new(scope, cb_global);
+        if let Ok(cb_fn) = v8::Local::<v8::Function>::try_from(cb) {
+            let tc = &mut v8::TryCatch::new(scope);
+            let _ = cb_fn.call(tc, doc_val, &[ev_val]);
+            if let Some(ex) = tc.exception() {
+                let err = ex
+                    .to_string(tc)
+                    .map(|s| s.to_rust_string_lossy(tc))
+                    .unwrap_or_default();
+                eprintln!(
+                    "[JS] document addEventListener for {} threw: {}",
+                    event_type, err
+                );
+            }
+        }
+    }
+    if let Some(handler_global) = inline {
+        let handler = v8::Local::new(scope, handler_global);
+        if handler.is_function() {
+            let cb = v8::Local::<v8::Function>::try_from(handler).unwrap();
+            let tc = &mut v8::TryCatch::new(scope);
+            let _ = cb.call(tc, doc_val, &[ev_val]);
+            if let Some(ex) = tc.exception() {
+                let err = ex
+                    .to_string(tc)
+                    .map(|s| s.to_rust_string_lossy(tc))
+                    .unwrap_or_default();
+                eprintln!("[JS] document.onreadystatechange threw: {}", err);
+            }
+        }
+    }
+}
+
+fn document_onreadystatechange_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let handler =
+        DOCUMENT_ONREADYSTATECHANGE.with(|m| m.borrow().as_ref().map(|g| v8::Local::new(scope, g)));
+    if let Some(h) = handler {
+        rv.set(h.into());
+    } else {
+        rv.set(v8::undefined(scope).into());
+    }
+}
+
+fn document_onreadystatechange_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    _args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    if value.is_function() {
+        if let Ok(func) = v8::Local::<v8::Function>::try_from(value) {
+            let global = v8::Global::new(scope, func);
+            DOCUMENT_ONREADYSTATECHANGE.with(|m| *m.borrow_mut() = Some(global));
+            return;
+        }
+    }
+    DOCUMENT_ONREADYSTATECHANGE.with(|m| *m.borrow_mut() = None);
+}
+
+fn document_ready_state_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let state = DOCUMENT_READY_STATE.with(|s| s.borrow().clone());
+    rv.set(v8_str(scope, &state).into());
+}
+
+/// Flush any async-module-loader (SML) modules whose dependencies are already
+/// evaluated. This is needed because dynamic <script type="module"> chunks
+/// register factories synchronously but only evaluate them when the module graph
+/// is traversed. We run this after every dynamic script so bundle registrations
+/// happen before the parent script's setTimeout/load handlers continue.
+fn flush_sml_modules(scope: &mut v8::HandleScope) {
+    let sml_flush = v8_str(
+        scope,
+        r#"
+        (function() {
+            var SML = window.SML;
+            if (!SML || !SML.moduleRegistry) return;
+            var regs = SML.moduleRegistry;
+            var keys = Object.keys(regs);
+            var pending = keys.filter(function(k){
+                var m = regs[k];
+                return m && m.isDeclared && !m.isEvaluated && !m.isEvaluating && !m.isRejected;
+            });
+            pending.forEach(function(k){
+                try {
+                    SML._evaluateModule(k, true);
+                } catch(e) {}
+            });
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, sml_flush, None) {
+        let _ = s.run(scope);
+    }
 }
 
 fn set_viewport_size(width: f32, height: f32) {
@@ -197,21 +380,39 @@ fn add_window_event_listener(
     });
 }
 
+fn add_document_event_listener(
+    scope: &mut v8::HandleScope,
+    event_type: &str,
+    func: v8::Local<v8::Function>,
+) {
+    DOCUMENT_EVENT_LISTENERS.with(|m| {
+        m.borrow_mut()
+            .entry(event_type.to_string())
+            .or_default()
+            .push(v8::Global::new(scope, func))
+    });
+}
+
 fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
+    let debug = std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some();
     let listeners: Vec<v8::Global<v8::Function>> =
         WINDOW_EVENT_LISTENERS.with(|m| m.borrow().get(event_type).cloned().unwrap_or_default());
     if listeners.is_empty() {
-        eprintln!(
-            "[JS] dispatch_window_event {}: no window listeners",
-            event_type
-        );
+        if debug {
+            eprintln!(
+                "[JS] dispatch_window_event {}: no window listeners",
+                event_type
+            );
+        }
         return;
     }
-    eprintln!(
-        "[JS] dispatch_window_event {}: {} listeners",
-        event_type,
-        listeners.len()
-    );
+    if debug {
+        eprintln!(
+            "[JS] dispatch_window_event {}: {} listeners",
+            event_type,
+            listeners.len()
+        );
+    }
     let global = scope.get_current_context().global(scope);
     let event = v8::Object::new(scope);
     set_str(scope, event, "type", event_type);
@@ -227,36 +428,82 @@ fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
     let _ = event.set(scope, default_prevented_key.into(), false_val);
     let ev_val: v8::Local<v8::Value> = event.into();
     let undef = v8::undefined(scope).into();
-    let mut promises = Vec::new();
+    let mut promises: Vec<v8::Global<v8::Promise>> = Vec::new();
     for listener in listeners {
         let func = v8::Local::new(scope, listener);
-        let (maybe_promise, maybe_err) = {
+        let maybe_prom: Option<v8::Global<v8::Promise>> = {
             let tc = &mut v8::TryCatch::new(scope);
             let ret = func.call(tc, undef, &[ev_val]);
-            let err = tc
-                .exception()
-                .and_then(|e| e.to_string(tc))
-                .map(|s| s.to_rust_string_lossy(tc));
-            (ret, err)
+            if let Some(ex) = tc.exception() {
+                let err = ex
+                    .to_string(tc)
+                    .map(|s| s.to_rust_string_lossy(tc))
+                    .unwrap_or_else(|| "unknown".into());
+                let mut stack = String::new();
+                let msg = v8::Exception::create_message(tc, ex);
+                if let Some(sl) = msg.get_source_line(tc) {
+                    let line = sl.to_rust_string_lossy(tc);
+                    if !line.is_empty() {
+                        stack.push_str(" near: ");
+                        stack.push_str(line.trim());
+                    }
+                }
+                if let Some(line_no) = msg.get_line_number(tc) {
+                    stack.push_str(&format!(" line {}", line_no));
+                }
+                if let Ok(err_obj) = ex.try_into() {
+                    let err_obj: v8::Local<v8::Object> = err_obj;
+                    let stack_key = v8_str(tc, "stack");
+                    if let Some(sv) = err_obj.get(tc, stack_key.into()) {
+                        let sv: v8::Local<v8::Value> = sv;
+                        let s = sv.to_rust_string_lossy(tc);
+                        if !s.is_empty() {
+                            stack.push_str(
+                                "
+  stack: ",
+                            );
+                            stack.push_str(&s.lines().take(8).collect::<Vec<_>>().join(
+                                "
+         ",
+                            ));
+                        }
+                    }
+                }
+                if debug {
+                    eprintln!(
+                        "[JS] event listener for {} threw: {}{}",
+                        event_type, err, stack
+                    );
+                }
+            }
+            // Capture promise inside the TryCatch scope before it drops.
+            let mut prom_global = None;
+            if let Some(p) = ret {
+                if let Ok(prom) = p.try_cast::<v8::Promise>() {
+                    prom_global = Some(v8::Global::new(tc, prom));
+                }
+            }
+            prom_global
         };
-        if let Some(err) = maybe_err {
-            eprintln!("[JS] event listener for {} threw: {}", event_type, err);
-        }
         // Pump microtasks so async event listeners can resume up to their first await.
         scope.perform_microtask_checkpoint();
-        if let Some(p) = maybe_promise {
-            if let Ok(prom) = p.try_cast::<v8::Promise>() {
+        if let Some(prom) = maybe_prom {
+            if debug {
                 eprintln!("[JS] listener returned a Promise, awaiting");
-                promises.push(v8::Global::new(scope, prom));
             }
+            promises.push(prom);
         }
-        eprintln!("[JS] dispatched {} listener done", event_type);
+        if debug {
+            eprintln!("[JS] dispatched {} listener done", event_type);
+        }
     }
     // Await any async listener promises to completion.
     for prom_global in promises {
         let prom = v8::Local::new(scope, prom_global);
         let state = prom.state();
-        eprintln!("[JS] listener promise initial state: {:?}", state);
+        if debug {
+            eprintln!("[JS] listener promise initial state: {:?}", state);
+        }
         if state == v8::PromiseState::Pending {
             // Poll microtasks until the promise settles (or we hit a budget).
             for _ in 0..20 {
@@ -267,18 +514,48 @@ fn dispatch_window_event(scope: &mut v8::HandleScope, event_type: &str) {
             }
         }
         let final_state = prom.state();
-        eprintln!("[JS] listener promise final state: {:?}", final_state);
+        if debug {
+            eprintln!("[JS] listener promise final state: {:?}", final_state);
+        }
+        if final_state == v8::PromiseState::Pending {
+            // The listener left a promise that depends on external resources
+            // (e.g. a dynamic import of a blob: URL we cannot resolve).
+            // Do not call prom.result() on a pending promise; V8 aborts.
+            // Log the state and continue so rendering can use the DOM state
+            // reached so far.
+            if debug {
+                eprintln!("[JS] listener promise still pending after microtask pump; continuing");
+            }
+            continue;
+        }
         let reason = prom.result(scope);
-        let reason_str = reason
-            .to_string(scope)
-            .map(|s| s.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| "<no string>".to_string());
-        eprintln!("[JS] listener promise result/rejection: {}", reason_str);
-        let type_str = reason.type_of(scope).to_rust_string_lossy(scope);
-        eprintln!("[JS] listener promise result type: {}", type_str);
+        if debug {
+            let reason_str = reason
+                .to_string(scope)
+                .map(|s| s.to_rust_string_lossy(scope))
+                .unwrap_or_else(|| "<no string>".to_string());
+            eprintln!("[JS] listener promise result/rejection: {}", reason_str);
+            let type_str = reason.type_of(scope).to_rust_string_lossy(scope);
+            eprintln!("[JS] listener promise result type: {}", type_str);
+            if reason.is_object() {
+                let stack_key = v8_str(scope, "stack");
+                if let Some(obj) = reason.to_object(scope) {
+                    let stack = obj
+                        .get(scope, stack_key.into())
+                        .and_then(|s| s.to_string(scope))
+                        .map(|s| s.to_rust_string_lossy(scope))
+                        .unwrap_or_default();
+                    if !stack.is_empty() {
+                        eprintln!("[JS] listener promise stack:\n{}", stack);
+                    }
+                }
+            }
+        }
     }
     scope.perform_microtask_checkpoint();
-    eprintln!("[JS] dispatch_window_event {} done", event_type);
+    if debug {
+        eprintln!("[JS] dispatch_window_event {} done", event_type);
+    }
 }
 
 fn queue_timeout(
@@ -370,13 +647,20 @@ fn drain_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     DRAIN_GUARD.with(|g| *g.borrow_mut() = false);
 }
 
+/// Flush custom-element upgrades that the JS polyfill queues so they run after
+/// the current script/module finishes setting up state.
+fn flush_custom_elements(scope: &mut v8::HandleScope) {
+    let code = "if (typeof window.__incognidium_flush_custom_elements === 'function') { window.__incognidium_flush_custom_elements(); }";
+    let source = v8_str(scope, code);
+    let _ = v8::Script::compile(scope, source, None).and_then(|script| script.run(scope));
+}
+
 /// Repeatedly run microtasks and drain the timeout queue until it stays empty or
 /// we hit the per-page callback budget. Challenge orchestrators commonly queue
 /// a timeout inside another timeout callback, so a single drain is not enough.
 fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
     let mut processed = 0usize;
-    eprintln!("[JS] flush_timeout_queue start");
-    for i in 0..10 {
+    for _ in 0..10 {
         if processed >= max {
             break;
         }
@@ -393,13 +677,52 @@ fn flush_timeout_queue(scope: &mut v8::HandleScope, max: usize) {
         }
     }
     // One final microtask pass for any leftover Promises.
-    eprintln!("[JS] flush_timeout_queue final microtask checkpoint");
     scope.perform_microtask_checkpoint();
-    eprintln!("[JS] flush_timeout_queue done");
 }
 
 const MAX_DYNAMIC_SCRIPT_SIZE: usize = 8 * 1024 * 1024; // 8 MB per dynamically loaded script
 const MAX_DYNAMIC_SCRIPT_DEPTH: usize = 12;
+
+/// Scripts appended by async module loaders are created, inserted, and then
+/// have their `onload` / `onerror` / event listeners attached *after*
+/// `appendChild` returns. Running them synchronously
+/// inside appendChild therefore misses those handlers. We defer them until
+/// the append call returns by stashing the value in a thread-local queue and
+/// flushing after appendChild / append / prepend / insertBefore complete.
+thread_local! {
+    static PENDING_DYNAMIC_SCRIPTS: RefCell<Vec<v8::Global<v8::Value>>> = RefCell::new(Vec::new());
+}
+
+fn enqueue_pending_dynamic_script(scope: &mut v8::HandleScope, child_val: v8::Local<v8::Value>) {
+    let global = v8::Global::new(scope, child_val);
+    PENDING_DYNAMIC_SCRIPTS.with(|p| p.borrow_mut().push(global));
+}
+
+thread_local! {
+    static FLUSHING_DYNAMIC_SCRIPTS: RefCell<bool> = RefCell::new(false);
+}
+
+fn flush_pending_dynamic_scripts(scope: &mut v8::HandleScope) {
+    let already = FLUSHING_DYNAMIC_SCRIPTS.with(|f| *f.borrow());
+    if already {
+        return;
+    }
+    FLUSHING_DYNAMIC_SCRIPTS.with(|f| *f.borrow_mut() = true);
+    loop {
+        let pending =
+            PENDING_DYNAMIC_SCRIPTS.with(|p| p.borrow_mut().drain(..).collect::<Vec<_>>());
+        if pending.is_empty() {
+            break;
+        }
+        for global in pending {
+            let child_val = v8::Local::new(scope, global);
+            if let Some(child) = extract_node_id(scope, child_val) {
+                execute_appended_script_if_needed(scope, child_val, child);
+            }
+        }
+    }
+    FLUSHING_DYNAMIC_SCRIPTS.with(|f| *f.borrow_mut() = false);
+}
 
 /// If `child` is a <script> element with a `src`, fetch and execute it synchronously.
 /// This lets webpack/next.js chunk loaders inject their dependencies at runtime.
@@ -408,17 +731,52 @@ fn execute_appended_script_if_needed(
     child_val: v8::Local<v8::Value>,
     child_id: NodeId,
 ) {
-    let (is_script, src) = with_dom(|state| {
+    let debug_module = std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some();
+    let (is_script, src, type_attr) = with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[child_id].data {
             if el.tag_name == "script" {
-                return (true, el.attributes.get("src").cloned());
+                return (
+                    true,
+                    el.attributes.get("src").cloned(),
+                    el.attributes.get("type").cloned(),
+                );
             }
         }
-        (false, None)
+        (false, None, None)
     });
     if !is_script {
         return;
     }
+    let dump_path = if let Some(ref s) = src {
+        if debug_module {
+            eprintln!("[dynamic script] appended script src={}", s);
+        }
+        // Debug: write a copy of every dynamically appended external script to
+        // the same dump directory used for initial scripts, so we can inspect
+        // post-execution chunks such as bundle-registration scripts.
+        if let Ok(dir) = std::env::var("INCOGNIDIUM_DUMP_DIR") {
+            let safe: String = s
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let safe = if safe.len() > 80 { &safe[..80] } else { &safe };
+            Some(std::path::PathBuf::from(dir).join(format!(
+                "dynamic_{}_{}.js",
+                DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow()),
+                safe
+            )))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let src = match src {
         Some(s) if !s.is_empty() => s,
         _ => return,
@@ -430,7 +788,9 @@ fn execute_appended_script_if_needed(
     let resolved = match incognidium_net::resolve_url(&base, &src) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Dynamic script URL resolve error for {}: {}", src, e);
+            if debug_module {
+                eprintln!("Dynamic script URL resolve error for {}: {}", src, e);
+            }
             return;
         }
     };
@@ -455,29 +815,41 @@ fn execute_appended_script_if_needed(
         }
     });
     if !depth_ok {
-        eprintln!(
-            "Dynamic script recursion limit reached, skipping {}",
-            resolved
-        );
+        if debug_module {
+            eprintln!(
+                "Dynamic script recursion limit reached, skipping {}",
+                resolved
+            );
+        }
         return;
     }
 
     let body = match incognidium_net::fetch_url_fast(&resolved) {
         Ok(resp) => {
             if resp.body.len() > MAX_DYNAMIC_SCRIPT_SIZE {
-                eprintln!(
-                    "Dynamic script too large ({} KB), skipping {}",
-                    resp.body.len() / 1024,
-                    resolved
-                );
+                if debug_module {
+                    eprintln!(
+                        "Dynamic script too large ({} KB), skipping {}",
+                        resp.body.len() / 1024,
+                        resolved
+                    );
+                }
                 call_script_event_handler(scope, child_val, "onerror");
                 DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() -= 1);
                 return;
             }
+            // Debug: persist dynamically fetched script bodies alongside the
+            // initial scripts so we can trace bundle definitions and loader
+            // registrations after the run terminates.
+            if let Some(path) = dump_path {
+                let _ = std::fs::write(&path, &resp.body);
+            }
             resp.body
         }
         Err(e) => {
-            eprintln!("Dynamic script fetch error for {}: {}", resolved, e);
+            if debug_module {
+                eprintln!("Dynamic script fetch error for {}: {}", resolved, e);
+            }
             call_script_event_handler(scope, child_val, "onerror");
             DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() -= 1);
             return;
@@ -485,9 +857,11 @@ fn execute_appended_script_if_needed(
     };
 
     // ES module syntax (import.meta / dynamic import) is illegal in V8
-    // script context. Rewrite it conservatively so webpack/next.js bundles
-    // can load when injected at runtime.
-    let body = transpile_module_to_script(&body, &resolved);
+    // script context. Modern bundles are sometimes served with no type="module"
+    // but still contain import.meta and dynamic imports, so we always run the
+    // conservative module-to-script rewrite. The rewrite only touches actual
+    // module syntax, so plain scripts are not corrupted.
+    let body = crate::transpile::transpile_module_to_script(&body, &resolved);
 
     if let Some(doc) = document_obj(scope) {
         let cs_key = v8_str(scope, "currentScript");
@@ -509,8 +883,10 @@ fn execute_appended_script_if_needed(
             .and_then(|e| e.to_string(tc))
             .map(|s| s.to_rust_string_lossy(tc))
         {
-            eprintln!("Dynamic script error in {}: {}", resolved, err);
-        } else if ok {
+            if debug_module {
+                eprintln!("Dynamic script error in {}: {}", resolved, err);
+            }
+        } else if ok && debug_module {
             eprintln!("[dynamic script OK] {} ({} bytes)", resolved, body.len());
         }
         ok
@@ -522,16 +898,90 @@ fn execute_appended_script_if_needed(
         doc.set(scope, cs_key.into(), null_val);
     }
 
-    // Flush timeouts queued by the script and any callbacks it fires. Challenge
-    // orchestrators often chain setTimeout calls, so one drain is not enough.
-    flush_timeout_queue(scope, 10);
-
     let handler_name = if success { "onload" } else { "onerror" };
+    if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
+        let check_src = v8_str(
+            scope,
+            r#"
+            (function() {
+                var el = this;
+                var hasOnload = typeof el.onload === 'function';
+                var hasOnerror = typeof el.onerror === 'function';
+                var hasAddEventListener = typeof el.addEventListener === 'function';
+                console.warn('[dynamic script handler check] src=' + (el.src || 'inline') + ' onload=' + hasOnload + ' onerror=' + hasOnerror + ' addEventListener=' + hasAddEventListener);
+            })
+            "#,
+        );
+        if let Some(script) = v8::Script::compile(scope, check_src, None) {
+            if let Some(func_val) = script.run(scope) {
+                if let Ok(func) = v8::Local::<v8::Function>::try_from(func_val) {
+                    let _ = func.call(scope, child_val, &[]);
+                }
+            }
+        }
+    }
     call_script_event_handler(scope, child_val, handler_name);
 
     // The onload/onerror handler may itself enqueue more work (e.g. JS challenge
-    // orchestrators chain their own onload callbacks).
+    // orchestrators chain their own onload callbacks). Run that work now before
+    // returning, so a setTimeout(0) inside the handler resolves before the
+    // parent script's own setTimeout callbacks.
     flush_timeout_queue(scope, 10);
+    // Definitions from the just-executed dynamic script may now make custom
+    // elements upgradeable; flush them before returning.
+    flush_custom_elements(scope);
+    // Modern sites with async module loaders or webpack module federation
+    // register module factories in <script type="module"> chunks. Because we
+    // execute appended scripts synchronously as classic scripts, factories that
+    // depend on an already-evaluated dependency graph may not be traversed
+    // automatically. Flush any modules whose dependencies are ready so bundle
+    // registrations such as addLoaders run before the parent script continues.
+    flush_sml_modules(scope);
+    // Restore URL/URLSearchParams if a polyfill clobbered them during the
+    // dynamic script. If we fixed it, re-run any async-loader bundle loads that
+    // previously failed because of the broken URL.
+    let restore_url_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            try {
+                var nativeURL = window.__incognidium_native_url;
+                var nativeUSP = window.__incognidium_native_usp;
+                var wasBroken = false;
+                try {
+                    var test = new window.URL('https://cdn.example.com/js/concat?prefix=en-US/');
+                    if (!test.searchParams || typeof test.searchParams.get !== 'function' || test.searchParams.get('prefix') !== 'en-US/') wasBroken = true;
+                } catch(e) { wasBroken = true; }
+                if (wasBroken && nativeURL) {
+                    Object.defineProperty(window, 'URL', { value: nativeURL, writable: true, configurable: true });
+                }
+                if (nativeUSP && (!window.URLSearchParams || typeof window.URLSearchParams !== 'function')) {
+                    Object.defineProperty(window, 'URLSearchParams', { value: nativeUSP, writable: true, configurable: true });
+                }
+                if (wasBroken) {
+                    // Retry any async-loader elements whose load() errored or
+                    // returned early because URL.searchParams was missing.
+                    var ctor = window.customElements.get('x-async-loader');
+                    if (ctor && ctor.__incognidium_loader_errored) {
+                        ctor.__incognidium_loader_errored.forEach(function(el){
+                            if (el && typeof el.load === 'function') {
+                                try { el.load(); } catch(e) {}
+                            }
+                        });
+                    }
+                }
+            } catch(e) {}
+        })();
+    "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, restore_url_js, None) {
+        let _ = s.run(scope);
+    }
+
+    // Final URL safety check after every dynamic script: if a polyfill left
+    // URL broken, repair it immediately so the next loader call succeeds.
+    let final_url_check = v8_str(scope, "if (typeof window.__incognidium_repair_url === 'function') { window.__incognidium_repair_url(); }");
+    let _ = v8::Script::compile(scope, final_url_check, None).and_then(|s| s.run(scope));
 
     DYNAMIC_SCRIPT_DEPTH.with(|d| {
         let cur = *d.borrow();
@@ -557,28 +1007,114 @@ fn call_script_event_handler(
         None => return,
     };
     if !val.is_function() {
-        return;
+        // No inline onload/onerror handler, but still dispatch any
+        // addEventListener('load'/'error') listeners registered on the element.
+        return dispatch_element_event(
+            scope,
+            child_val,
+            if name == "onload" { "load" } else { "error" },
+        );
     }
     let func = match v8::Local::<v8::Function>::try_from(val) {
         Ok(f) => f,
         Err(_) => return,
     };
-    let undef = v8::undefined(scope).into();
+    let obj_val: v8::Local<v8::Value> = obj.into();
     let ev = v8::Object::new(scope);
     let type_key = v8_str(scope, "type");
     let type_val = v8_str(scope, if name == "onload" { "load" } else { "error" });
-    let _ = obj.set(scope, type_key.into(), type_val.into());
+    let _ = ev.set(scope, type_key.into(), type_val.into());
+    let target_key = v8_str(scope, "target");
+    let _ = ev.set(scope, target_key.into(), obj_val);
+    let current_target_key = v8_str(scope, "currentTarget");
+    let _ = ev.set(scope, current_target_key.into(), obj_val);
     let args = [ev.into()];
-    let tc = &mut v8::TryCatch::new(scope);
-    let _ = func.call(tc, undef, &args);
-    if tc.has_caught() {
-        let err = tc
-            .exception()
-            .and_then(|e| e.to_string(tc))
-            .map(|s| s.to_rust_string_lossy(tc))
-            .unwrap_or_default();
-        eprintln!("[script {} handler error] {}", name, err);
+    {
+        let tc = &mut v8::TryCatch::new(scope);
+        let _ = func.call(tc, obj_val, &args);
+        if tc.has_caught() {
+            let err = tc
+                .exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[script {} handler error] {}", name, err);
+        }
     }
+    dispatch_element_event(
+        scope,
+        child_val,
+        if name == "onload" { "load" } else { "error" },
+    );
+}
+
+/// Fire element-level listeners for a lifecycle event (load/error) on the
+/// given JS wrapper, using the separate ELEMENT_EVENT_LISTENERS registry.
+fn dispatch_element_event(
+    scope: &mut v8::HandleScope,
+    target_val: v8::Local<v8::Value>,
+    event_type: &str,
+) {
+    let nid = match extract_node_id(scope, target_val) {
+        Some(n) => n,
+        None => return,
+    };
+    let listeners: Vec<v8::Global<v8::Function>> = ELEMENT_EVENT_LISTENERS.with(|m| {
+        m.borrow()
+            .get(&nid)
+            .and_then(|map| map.get(event_type).cloned())
+            .unwrap_or_default()
+    });
+    if listeners.is_empty() {
+        return;
+    }
+    let obj = match v8::Local::<v8::Object>::try_from(target_val) {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let obj_val: v8::Local<v8::Value> = obj.into();
+    let ev = v8::Object::new(scope);
+    let type_key = v8_str(scope, "type");
+    let type_val = v8_str(scope, event_type);
+    let _ = ev.set(scope, type_key.into(), type_val.into());
+    let target_key = v8_str(scope, "target");
+    let _ = ev.set(scope, target_key.into(), obj_val);
+    let args = [ev.into()];
+    for global in listeners {
+        let func = v8::Local::new(scope, global);
+        let tc = &mut v8::TryCatch::new(scope);
+        let _ = func.call(tc, obj_val, &args);
+        if tc.has_caught() {
+            let err = tc
+                .exception()
+                .and_then(|e| e.to_string(tc))
+                .map(|s| s.to_rust_string_lossy(tc))
+                .unwrap_or_default();
+            eprintln!("[element {} listener error] {}", event_type, err);
+        }
+    }
+}
+
+fn document_scripts_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // Return an empty array-like collection. Most loaders just check existence.
+    let arr = v8::Array::new(scope, 0);
+    rv.set(arr.into());
+}
+
+fn document_default_view_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    // document.defaultView is the Window object associated with the document.
+    let global = scope.get_current_context().global(scope);
+    rv.set(global.into());
 }
 
 fn document_obj<'s>(scope: &mut v8::HandleScope<'s>) -> Option<v8::Local<'s, v8::Object>> {
@@ -588,6 +1124,15 @@ fn document_obj<'s>(scope: &mut v8::HandleScope<'s>) -> Option<v8::Local<'s, v8:
 fn set_document_obj(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>) {
     let g = v8::Global::new(scope, obj);
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = Some(g));
+}
+
+fn is_document_obj(scope: &mut v8::HandleScope, obj: v8::Local<v8::Value>) -> bool {
+    let doc = match document_obj(scope) {
+        Some(d) => d,
+        None => return false,
+    };
+    let a: v8::Local<v8::Value> = doc.into();
+    a.strict_equals(obj)
 }
 
 fn cache_get<'s>(
@@ -619,6 +1164,822 @@ fn page_base_url() -> Option<String> {
 fn clear_loaded_scripts() {
     LOADED_SCRIPTS.with(|s| s.borrow_mut().clear());
     DYNAMIC_SCRIPT_DEPTH.with(|d| *d.borrow_mut() = 0);
+}
+
+fn clear_module_registry() {
+    MODULE_REGISTRY.with(|m| m.borrow_mut().clear());
+}
+
+/// Rewrite ES module export declarations into CommonJS-style property
+/// assignments on a supplied `exports` object. This lets dynamically imported
+/// modules expose real values through `__incognidium_import()` instead of
+/// returning empty placeholder objects.
+/// Rewrite ES module export declarations into CommonJS-style property
+/// assignments on a supplied `exports` object. This lets dynamically imported
+/// modules expose real values through `__incognidium_import()` instead of
+/// returning empty placeholder objects.
+fn module_source_to_cjs(source: &str) -> String {
+    rewrite_exports_to_cjs(source)
+}
+
+/// Scan `source` for ES module `export` declarations and rewrite them into
+/// CommonJS assignments on a synthetic `exports` object. The scanner is
+/// string/template/comment aware so string literals containing the word
+/// "export" are left untouched.
+fn rewrite_exports_to_cjs(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len() + 64);
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ScanState {
+        Code,
+        LineComment,
+        BlockComment,
+        SingleString,
+        DoubleString,
+        Template,
+    }
+
+    let mut i = 0usize;
+    let mut state = ScanState::Code;
+    let mut template_brace_depth = 0i32;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            ScanState::Code => {
+                if i + 1 < bytes.len() && b == b'/' {
+                    if bytes[i + 1] == b'/' {
+                        state = ScanState::LineComment;
+                        out.push('/');
+                        out.push('/');
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i + 1] == b'*' {
+                        state = ScanState::BlockComment;
+                        out.push('/');
+                        out.push('*');
+                        i += 2;
+                        continue;
+                    }
+                }
+                if b == b'\'' {
+                    state = ScanState::SingleString;
+                    out.push('\'');
+                    i += 1;
+                    continue;
+                }
+                if b == b'"' {
+                    state = ScanState::DoubleString;
+                    out.push('"');
+                    i += 1;
+                    continue;
+                }
+                if b == b'`' {
+                    state = ScanState::Template;
+                    template_brace_depth = 0;
+                    out.push('`');
+                    i += 1;
+                    continue;
+                }
+
+                if is_keyword_at(bytes, i, b"export") {
+                    let (end, replacement) = rewrite_export_statement(source, i);
+                    out.push_str(&replacement);
+                    i = end;
+                    continue;
+                }
+
+                out.push(b as char);
+                i += 1;
+            }
+            ScanState::LineComment => {
+                out.push(b as char);
+                if b == b'\n' {
+                    state = ScanState::Code;
+                }
+                i += 1;
+            }
+            ScanState::BlockComment => {
+                out.push(b as char);
+                if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    out.push('/');
+                    state = ScanState::Code;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            ScanState::SingleString => {
+                out.push(b as char);
+                if b == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if b == b'\'' {
+                    state = ScanState::Code;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            ScanState::DoubleString => {
+                out.push(b as char);
+                if b == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if b == b'"' {
+                    state = ScanState::Code;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            ScanState::Template => {
+                out.push(b as char);
+                if b == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if template_brace_depth == 0 && b == b'`' {
+                    state = ScanState::Code;
+                    i += 1;
+                } else if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    template_brace_depth += 1;
+                    out.push('{');
+                    i += 2;
+                } else if template_brace_depth > 0 && b == b'}' {
+                    template_brace_depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// True when `bytes[pos..]` starts with `word` and is followed by a non-id
+/// character (or end of input), so we don't match "exportFoo".
+fn is_keyword_at(bytes: &[u8], pos: usize, word: &[u8]) -> bool {
+    if pos + word.len() > bytes.len() {
+        return false;
+    }
+    if &bytes[pos..pos + word.len()] != word {
+        return false;
+    }
+    let after = pos + word.len();
+    if after >= bytes.len() {
+        return true;
+    }
+    let c = bytes[after];
+    !(c.is_ascii_alphanumeric() || c == b'_' || c == b'$')
+}
+
+/// Find the end of the current JS statement starting at `start` (which points
+/// at the `export` keyword). The end is the first top-level semicolon outside
+/// of strings, templates, comments and balanced brace/paren/bracket pairs.
+fn find_statement_end(source: &str, start: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut i = start;
+    let mut state = 0u8; // 0 code, 1 line comment, 2 block comment, 3 single str, 4 double str, 5 template
+    let mut template_brace_depth = 0i32;
+    let mut brace_depth = 0i32;
+    let mut paren_depth = 0i32;
+    let mut bracket_depth = 0i32;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            0 => {
+                if i + 1 < bytes.len() && b == b'/' {
+                    if bytes[i + 1] == b'/' {
+                        state = 1;
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i + 1] == b'*' {
+                        state = 2;
+                        i += 2;
+                        continue;
+                    }
+                }
+                if b == b'\'' {
+                    state = 3;
+                    i += 1;
+                    continue;
+                }
+                if b == b'"' {
+                    state = 4;
+                    i += 1;
+                    continue;
+                }
+                if b == b'`' {
+                    state = 5;
+                    template_brace_depth = 0;
+                    i += 1;
+                    continue;
+                }
+
+                match b {
+                    b'{' => brace_depth += 1,
+                    b'}' => brace_depth = (brace_depth - 1).max(0),
+                    b'(' => paren_depth += 1,
+                    b')' => paren_depth = (paren_depth - 1).max(0),
+                    b'[' => bracket_depth += 1,
+                    b']' => bracket_depth = (bracket_depth - 1).max(0),
+                    b';' => {
+                        if brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                            return i + 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            1 => {
+                if b == b'\n' {
+                    state = 0;
+                }
+                i += 1;
+            }
+            2 => {
+                if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    state = 0;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            3 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'\'' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            4 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'"' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            5 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if template_brace_depth == 0 && b == b'`' {
+                    state = 0;
+                    i += 1;
+                } else if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    template_brace_depth += 1;
+                    i += 2;
+                } else if template_brace_depth > 0 && b == b'}' {
+                    template_brace_depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+
+    bytes.len()
+}
+
+/// Skip whitespace and comments starting at `pos`, returning the index of the
+/// first non-whitespace code character.
+fn skip_ws_and_comments(source: &str, mut pos: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut state = 0u8; // 0 code, 1 line comment, 2 block comment
+    while pos < bytes.len() {
+        let b = bytes[pos];
+        match state {
+            0 => {
+                if b.is_ascii_whitespace() {
+                    pos += 1;
+                    continue;
+                }
+                if pos + 1 < bytes.len() && b == b'/' && bytes[pos + 1] == b'/' {
+                    state = 1;
+                    pos += 2;
+                    continue;
+                }
+                if pos + 1 < bytes.len() && b == b'/' && bytes[pos + 1] == b'*' {
+                    state = 2;
+                    pos += 2;
+                    continue;
+                }
+                return pos;
+            }
+            1 => {
+                if b == b'\n' {
+                    state = 0;
+                }
+                pos += 1;
+            }
+            2 => {
+                if b == b'*' && pos + 1 < bytes.len() && bytes[pos + 1] == b'/' {
+                    state = 0;
+                    pos += 2;
+                } else {
+                    pos += 1;
+                }
+            }
+            _ => return pos,
+        }
+    }
+    pos
+}
+
+/// Inspect an export statement beginning at `start` and produce a CommonJS
+/// replacement string along with the index immediately after the statement.
+fn rewrite_export_statement(source: &str, start: usize) -> (usize, String) {
+    let end = find_statement_end(source, start);
+    let stmt = &source[start..end];
+
+    let after_export = skip_ws_and_comments(source, start + 6);
+    if after_export >= source.len() {
+        return (end, stmt.to_string());
+    }
+
+    let bytes = source.as_bytes();
+    let first = bytes[after_export];
+
+    if first == b'{' {
+        let list_end = find_matching_brace(source, after_export);
+        let inner = if list_end > after_export + 1 {
+            &source[after_export + 1..list_end]
+        } else {
+            ""
+        };
+
+        let after_brace = skip_ws_and_comments(source, list_end + 1);
+        if after_brace + 4 <= bytes.len() && &source[after_brace..after_brace + 4] == "from" {
+            let after_from = after_brace + 4;
+            if after_from >= bytes.len()
+                || !(bytes[after_from].is_ascii_alphanumeric()
+                    || bytes[after_from] == b'_'
+                    || bytes[after_from] == b'$')
+            {
+                return (end, String::new());
+            }
+        }
+
+        let mut replacement = String::new();
+        for spec in split_export_specs(inner) {
+            let spec = spec.trim();
+            if spec.is_empty() {
+                continue;
+            }
+            if let Some(pos) = spec.find(" as ") {
+                let local = spec[..pos].trim();
+                let exported = spec[pos + 4..].trim();
+                replacement.push_str(&format!("exports.{} = {}; ", exported, local));
+            } else {
+                let name = spec.split_whitespace().next().unwrap_or(spec);
+                replacement.push_str(&format!("exports.{} = {}; ", name, name));
+            }
+        }
+        return (end, replacement);
+    }
+
+    if first == b'*' {
+        return (end, String::new());
+    }
+
+    if is_keyword_at(bytes, after_export, b"default") {
+        let expr_start = skip_ws_and_comments(source, after_export + 7);
+        let mut expr_end = end;
+        while expr_end > expr_start {
+            let c = bytes[expr_end - 1];
+            if c == b';' || c.is_ascii_whitespace() {
+                expr_end -= 1;
+            } else {
+                break;
+            }
+        }
+        let expr = if expr_end > expr_start {
+            source[expr_start..expr_end].trim()
+        } else {
+            "undefined"
+        };
+        let replacement = format!(
+            "module.exports = {};\nmodule.exports.default = {};\n",
+            expr, expr
+        );
+        return (end, replacement);
+    }
+
+    if is_keyword_at(bytes, after_export, b"async") {
+        let after_async = skip_ws_and_comments(source, after_export + 5);
+        if is_keyword_at(bytes, after_async, b"function") {
+            let decl = &source[start..end];
+            let stripped = strip_export_keyword(decl);
+            let name = extract_function_name(&source[after_async + 8..end]);
+            return (end, format!("{}exports.{} = {};\n", stripped, name, name));
+        }
+    }
+
+    if is_keyword_at(bytes, after_export, b"function") {
+        let decl = &source[start..end];
+        let stripped = strip_export_keyword(decl);
+        let name = extract_function_name(&source[after_export + 8..end]);
+        return (end, format!("{}exports.{} = {};\n", stripped, name, name));
+    }
+
+    if is_keyword_at(bytes, after_export, b"class") {
+        let decl = &source[start..end];
+        let stripped = strip_export_keyword(decl);
+        let name = extract_class_name(&source[after_export + 5..end]);
+        return (end, format!("{}exports.{} = {};\n", stripped, name, name));
+    }
+
+    if is_keyword_at(bytes, after_export, b"const")
+        || is_keyword_at(bytes, after_export, b"let")
+        || is_keyword_at(bytes, after_export, b"var")
+    {
+        let decl = &source[start..end];
+        let mut replacement = strip_export_keyword(decl);
+        let names = extract_declaration_names(&source[after_export..end]);
+        for name in names {
+            replacement.push_str(&format!("exports.{} = {};\n", name, name));
+        }
+        return (end, replacement);
+    }
+
+    (end, stmt.to_string())
+}
+
+/// Find the index of the matching `}` for the `{` at `open_pos`.
+fn find_matching_brace(source: &str, open_pos: usize) -> usize {
+    let bytes = source.as_bytes();
+    if open_pos >= bytes.len() || bytes[open_pos] != b'{' {
+        return open_pos;
+    }
+    let mut depth = 1i32;
+    let mut i = open_pos + 1;
+    let mut state = 0u8;
+    let mut template_brace_depth = 0i32;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            0 => {
+                if i + 1 < bytes.len() && b == b'/' {
+                    if bytes[i + 1] == b'/' {
+                        state = 1;
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i + 1] == b'*' {
+                        state = 2;
+                        i += 2;
+                        continue;
+                    }
+                }
+                match b {
+                    b'\'' => {
+                        state = 3;
+                        i += 1;
+                        continue;
+                    }
+                    b'"' => {
+                        state = 4;
+                        i += 1;
+                        continue;
+                    }
+                    b'`' => {
+                        state = 5;
+                        template_brace_depth = 0;
+                        i += 1;
+                        continue;
+                    }
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return i;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            1 => {
+                if b == b'\n' {
+                    state = 0;
+                }
+                i += 1;
+            }
+            2 => {
+                if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    state = 0;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            3 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'\'' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            4 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'"' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            5 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if template_brace_depth == 0 && b == b'`' {
+                    state = 0;
+                    i += 1;
+                } else if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    template_brace_depth += 1;
+                    i += 2;
+                } else if template_brace_depth > 0 && b == b'}' {
+                    template_brace_depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    bytes.len().saturating_sub(1)
+}
+
+/// Split an export specifier list (`a, b as c`) into individual specifiers,
+/// respecting nested braces/parens/brackets and strings.
+fn split_export_specs(inner: &str) -> Vec<&str> {
+    let bytes = inner.as_bytes();
+    let mut specs = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut state = 0u8;
+    let mut template_brace_depth = 0i32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            0 => {
+                match b {
+                    b'\'' => {
+                        state = 1;
+                        i += 1;
+                        continue;
+                    }
+                    b'"' => {
+                        state = 2;
+                        i += 1;
+                        continue;
+                    }
+                    b'`' => {
+                        state = 3;
+                        template_brace_depth = 0;
+                        i += 1;
+                        continue;
+                    }
+                    b'{' | b'(' | b'[' => depth += 1,
+                    b'}' | b')' | b']' => depth -= 1,
+                    b',' => {
+                        if depth == 0 {
+                            specs.push(&inner[start..i]);
+                            start = i + 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            1 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'\'' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            2 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if b == b'"' {
+                    state = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            3 => {
+                if b == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if template_brace_depth == 0 && b == b'`' {
+                    state = 0;
+                    i += 1;
+                } else if b == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    template_brace_depth += 1;
+                    i += 2;
+                } else if template_brace_depth > 0 && b == b'}' {
+                    template_brace_depth -= 1;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    if start < inner.len() {
+        specs.push(&inner[start..]);
+    }
+    specs
+}
+
+/// Remove the leading `export` keyword (and the following whitespace) from a
+/// declaration so it becomes valid script syntax.
+fn strip_export_keyword(decl: &str) -> String {
+    let bytes = decl.as_bytes();
+    if is_keyword_at(bytes, 0, b"export") {
+        let mut pos = 6;
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        return decl[pos..].to_string();
+    }
+    decl.to_string()
+}
+
+/// Extract the name from a function declaration that immediately follows
+/// `function`/`async function`.
+fn extract_function_name(after_function: &str) -> String {
+    let trimmed = after_function.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'*') {
+        i += 1;
+    }
+    let start = i;
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$')
+    {
+        i += 1;
+    }
+    trimmed[start..i].to_string()
+}
+
+/// Extract the class name from the text after `class`.
+fn extract_class_name(after_class: &str) -> String {
+    let trimmed = after_class.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let start = i;
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$')
+    {
+        i += 1;
+    }
+    trimmed[start..i].to_string()
+}
+
+/// Extract simple declared names from `const a = 1, b = 2` or
+/// `let {x, y} = z`. The input still includes the declaration keyword.
+fn extract_declaration_names(after_keyword: &str) -> Vec<String> {
+    let trimmed = after_keyword.trim_start();
+    // Skip the leading declaration keyword if present.
+    let after_keyword = if trimmed.starts_with("const ") {
+        &trimmed[6..]
+    } else if trimmed.starts_with("let ") {
+        &trimmed[4..]
+    } else if trimmed.starts_with("var ") {
+        &trimmed[4..]
+    } else {
+        trimmed
+    };
+    let mut names = Vec::new();
+    for spec in split_export_specs(after_keyword) {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            continue;
+        }
+        let bytes = spec.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_whitespace() || bytes[i] == b'{' || bytes[i] == b'[')
+        {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$')
+        {
+            i += 1;
+        }
+        let name = &spec[start..i];
+        if !name.is_empty() {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn resolve_module_url_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let spec = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let base = args
+        .get(1)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let base = if base.is_empty() {
+        page_base_url().unwrap_or_else(|| "https://example.com/".to_string())
+    } else {
+        base
+    };
+    let resolved = incognidium_net::resolve_url(&base, &spec).unwrap_or(spec);
+    rv.set(v8_str(scope, &resolved).into());
+}
+
+fn fetch_module_source_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let url = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    if url.is_empty() {
+        rv.set(v8::undefined(scope).into());
+        return;
+    }
+    if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
+        eprintln!("[module loader] resolving module: {}", url);
+    }
+    let base = page_base_url().unwrap_or_default();
+    let referer = if base.is_empty() {
+        None
+    } else {
+        Some(base.as_str())
+    };
+    let source = match incognidium_net::fetch_bytes_with_referer(&url, referer) {
+        Ok(bytes) => {
+            if std::env::var_os("INCOGNIDIUM_DEBUG_MODULE").is_some() {
+                let len = bytes.len();
+                let preview = String::from_utf8_lossy(&bytes[..len.min(80)]).into_owned();
+                eprintln!(
+                    "[module loader] fetched {} ({} bytes): {}",
+                    url, len, preview
+                );
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        Err(e) => {
+            eprintln!("[module loader] failed to fetch {}: {}", url, e);
+            rv.set(v8::undefined(scope).into());
+            return;
+        }
+    };
+    // Rewrite ES module syntax so the source can be evaluated as a regular
+    // script by `new Function` in the JS loader. Dynamic imports are converted
+    // to our loader calls and exports are converted to CommonJS assignments.
+    // Preserve top-level exports while rewriting import.meta and dynamic imports;
+    // the CJS pass below turns those exports into CommonJS assignments.
+    let source = crate::transpile::transpile_module_to_script_preserving_exports(&source, &url);
+    let source = module_source_to_cjs(&source);
+    rv.set(v8_str(scope, &source).into());
 }
 
 fn with_dom<F, R>(f: F) -> R
@@ -700,6 +2061,14 @@ fn set_str(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str, 
     obj.set(scope, key.into(), v.into());
 }
 
+fn get_str(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str) -> String {
+    let key = v8_str(scope, name);
+    match obj.get(scope, key.into()) {
+        Some(v) => v.to_rust_string_lossy(scope),
+        None => String::new(),
+    }
+}
+
 fn set_int(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str, val: i32) {
     let key = v8_str(scope, name);
     let v = v8::Integer::new(scope, val);
@@ -710,6 +2079,14 @@ fn set_bool(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str,
     let key = v8_str(scope, name);
     let v = v8::Boolean::new(scope, val);
     obj.set(scope, key.into(), v.into());
+}
+
+fn get_bool(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str) -> bool {
+    let key = v8_str(scope, name);
+    match obj.get(scope, key.into()) {
+        Some(v) => v.is_true(),
+        None => false,
+    }
 }
 
 fn set_num(scope: &mut v8::HandleScope, obj: v8::Local<v8::Object>, name: &str, val: f64) {
@@ -736,7 +2113,11 @@ fn get_prop<'s>(
 fn extract_node_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
     let obj = val.to_object(scope)?;
     let nid = get_prop(scope, obj, "__node_id__")?;
-    nid.int32_value(scope).map(|n| n as NodeId)
+    let n = nid.int32_value(scope)?;
+    if n < 0 {
+        return None;
+    }
+    Some(n as NodeId)
 }
 
 fn extract_element_id(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> Option<NodeId> {
@@ -1330,6 +2711,232 @@ fn wrap_thenable_or_value(
     rv.set(ret.into());
 }
 
+/// Parse a raw `key: value\n...` header string into a map.
+fn parse_headers_raw(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in raw.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            map.insert(k.to_string(), v.trim().to_string());
+        }
+    }
+    map
+}
+
+fn fetch_headers_get_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope).to_lowercase()
+    } else {
+        String::new()
+    };
+    let raw = get_str(scope, this, "__headers_raw");
+    let map = parse_headers_raw(&raw);
+    let val = map.get(&key).cloned().unwrap_or_default();
+    rv.set(v8_str(scope, &val).into());
+}
+
+fn fetch_headers_has_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope).to_lowercase()
+    } else {
+        String::new()
+    };
+    let raw = get_str(scope, this, "__headers_raw");
+    let map = parse_headers_raw(&raw);
+    rv.set(v8::Boolean::new(scope, map.contains_key(&key)).into());
+}
+
+fn fetch_headers_set_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    if args.length() >= 2 {
+        let key = args.get(0).to_rust_string_lossy(scope).to_lowercase();
+        let value = args.get(1).to_rust_string_lossy(scope);
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = parse_headers_raw(&raw);
+        map.insert(key, value);
+        let stored = map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_str(scope, this, "__headers_raw", &stored);
+    }
+}
+
+fn fetch_headers_append_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    if args.length() >= 2 {
+        let key = args.get(0).to_rust_string_lossy(scope).to_lowercase();
+        let value = args.get(1).to_rust_string_lossy(scope);
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = parse_headers_raw(&raw);
+        let existing = map.get(&key).cloned().unwrap_or_default();
+        let merged = if existing.is_empty() {
+            value
+        } else {
+            format!("{}, {}", existing, value)
+        };
+        map.insert(key, merged);
+        let stored = map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_str(scope, this, "__headers_raw", &stored);
+    }
+}
+
+fn fetch_headers_delete_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    if args.length() > 0 {
+        let key = args.get(0).to_rust_string_lossy(scope).to_lowercase();
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = parse_headers_raw(&raw);
+        map.remove(&key);
+        let stored = map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_str(scope, this, "__headers_raw", &stored);
+    }
+}
+
+fn fetch_headers_for_each_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    if let Ok(cb) = v8::Local::<v8::Function>::try_from(args.get(0)) {
+        let raw = get_str(scope, this, "__headers_raw");
+        let map = parse_headers_raw(&raw);
+        let pairs: Vec<(String, String)> = map.into_iter().collect();
+        let undef = v8::undefined(scope).into();
+        for (k, v) in pairs {
+            let v_str = v8_str(scope, &v);
+            let k_str = v8_str(scope, &k);
+            let _ = cb.call(scope, undef, &[v_str.into(), k_str.into(), this.into()]);
+        }
+    }
+}
+
+/// Build a `Headers` object backed by a raw header string.
+fn make_headers_object<'a>(
+    scope: &mut v8::HandleScope<'a>,
+    raw: &str,
+) -> v8::Local<'a, v8::Object> {
+    let obj = v8::Object::new(scope);
+    set_str(scope, obj, "__headers_raw", raw);
+    set_fn(scope, obj, "get", fetch_headers_get_cb);
+    set_fn(scope, obj, "has", fetch_headers_has_cb);
+    set_fn(scope, obj, "set", fetch_headers_set_cb);
+    set_fn(scope, obj, "append", fetch_headers_append_cb);
+    set_fn(scope, obj, "delete", fetch_headers_delete_cb);
+    set_fn(scope, obj, "forEach", fetch_headers_for_each_cb);
+    obj
+}
+
+fn resp_text_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__body");
+    let body = match this.get(scope, key.into()) {
+        Some(v) => match v.to_string(scope) {
+            Some(s) => s.to_rust_string_lossy(scope),
+            None => String::new(),
+        },
+        None => String::new(),
+    };
+    let ret = v8::Object::new(scope);
+    let body_val = v8_str(scope, &body);
+    let text_key = v8_str(scope, "__text");
+    ret.set(scope, text_key.into(), body_val.into());
+    set_fn(scope, ret, "then", resp_text_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    set_fn(scope, ret, "finally", promise_finally_cb);
+    rv.set(ret.into());
+}
+
+fn resp_json_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let key = v8_str(scope, "__body");
+    let body = match this.get(scope, key.into()) {
+        Some(v) => match v.to_string(scope) {
+            Some(s) => s.to_rust_string_lossy(scope),
+            None => String::new(),
+        },
+        None => String::new(),
+    };
+    let ret = v8::Object::new(scope);
+    let body_val = v8_str(scope, &body);
+    let json_key = v8_str(scope, "__json_text");
+    ret.set(scope, json_key.into(), body_val.into());
+    set_fn(scope, ret, "then", resp_json_then_cb);
+    set_fn(scope, ret, "catch", noop);
+    set_fn(scope, ret, "finally", promise_finally_cb);
+    rv.set(ret.into());
+}
+
+/// Build a minimal body stream object with `getReader()`.
+fn make_body_stream<'a>(scope: &mut v8::HandleScope<'a>) -> v8::Local<'a, v8::Object> {
+    let stream = v8::Object::new(scope);
+    fn get_reader_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let reader = v8::Object::new(scope);
+        fn read_done_cb(
+            scope: &mut v8::HandleScope,
+            _args: v8::FunctionCallbackArguments,
+            mut rv: v8::ReturnValue,
+        ) {
+            let result = v8::Object::new(scope);
+            set_bool(scope, result, "done", true);
+            let value = v8::Array::new(scope, 0);
+            let value_key = v8_str(scope, "value");
+            result.set(scope, value_key.into(), value.into());
+            rv.set(result.into());
+        }
+        set_fn(scope, reader, "read", read_done_cb);
+        set_fn(scope, reader, "releaseLock", noop);
+        set_fn(scope, reader, "cancel", noop);
+        rv.set(reader.into());
+    }
+    set_fn(scope, stream, "getReader", get_reader_cb);
+    set_bool(scope, stream, "locked", false);
+    stream
+}
+
 /// Synchronous fetch() for JS. Executes request immediately and returns a
 /// fake-promise that resolves on the next `.then()` call.
 fn fetch_cb(
@@ -1374,7 +2981,9 @@ fn fetch_cb(
     if let Some(init) = args.get(1).to_object(scope) {
         let method_key = v8_str(scope, "method");
         if let Some(v) = init.get(scope, method_key.into()) {
-            method = v.to_rust_string_lossy(scope);
+            if !v.is_null_or_undefined() {
+                method = v.to_rust_string_lossy(scope);
+            }
         }
         let body_key = v8_str(scope, "body");
         if let Some(v) = init.get(scope, body_key.into()) {
@@ -1387,42 +2996,58 @@ fn fetch_cb(
             .get(scope, headers_key.into())
             .and_then(|h| h.to_object(scope))
         {
-            let entries_key = v8_str(scope, "entries");
-            if let Some(entries_fn) = h
-                .get(scope, entries_key.into())
-                .and_then(|e| e.try_into().ok())
-            {
-                let entries: v8::Local<v8::Function> = entries_fn;
-                let this: v8::Local<v8::Value> = h.into();
-                let undef = v8::undefined(scope).into();
-                if let Some(iter) = entries.call(scope, this, &[undef]) {
-                    let next_key = v8_str(scope, "next");
-                    if let Some(next_fn) = iter.to_object(scope).and_then(|o| {
-                        o.get(scope, next_key.into())
-                            .and_then(|n| n.try_into().ok())
-                    }) {
-                        let next: v8::Local<v8::Function> = next_fn;
-                        let iter_val: v8::Local<v8::Value> = iter;
-                        loop {
-                            let undef = v8::undefined(scope).into();
-                            let entry = next.call(scope, iter_val, &[undef]);
-                            let done = entry
-                                .and_then(|e| e.to_object(scope))
-                                .and_then(|e| {
-                                    let done_key = v8_str(scope, "done");
-                                    e.get(scope, done_key.into()).map(|d| d.is_true())
-                                })
-                                .unwrap_or(true);
-                            if done {
-                                break;
-                            }
-                            if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
-                                let zero = v8::Integer::new(scope, 0).into();
-                                let one = v8::Integer::new(scope, 1).into();
-                                let k = e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
-                                let v = e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
-                                if let (Some(k), Some(v)) = (k, v) {
-                                    extra_headers.insert(k, v);
+            // First try our own Headers backing store.
+            let raw_key = v8_str(scope, "__headers_raw");
+            let raw = h
+                .get(scope, raw_key.into())
+                .map(|v| v.to_rust_string_lossy(scope))
+                .unwrap_or_default();
+            if !raw.is_empty() {
+                for line in raw.lines() {
+                    if let Some((k, v)) = line.split_once(':') {
+                        extra_headers.insert(k.trim().to_string(), v.trim().to_string());
+                    }
+                }
+            } else {
+                let entries_key = v8_str(scope, "entries");
+                if let Some(entries_fn) = h
+                    .get(scope, entries_key.into())
+                    .and_then(|e| e.try_into().ok())
+                {
+                    let entries: v8::Local<v8::Function> = entries_fn;
+                    let this: v8::Local<v8::Value> = h.into();
+                    let undef = v8::undefined(scope).into();
+                    if let Some(iter) = entries.call(scope, this, &[undef]) {
+                        let next_key = v8_str(scope, "next");
+                        if let Some(next_fn) = iter.to_object(scope).and_then(|o| {
+                            o.get(scope, next_key.into())
+                                .and_then(|n| n.try_into().ok())
+                        }) {
+                            let next: v8::Local<v8::Function> = next_fn;
+                            let iter_val: v8::Local<v8::Value> = iter;
+                            loop {
+                                let undef = v8::undefined(scope).into();
+                                let entry = next.call(scope, iter_val, &[undef]);
+                                let done = entry
+                                    .and_then(|e| e.to_object(scope))
+                                    .and_then(|e| {
+                                        let done_key = v8_str(scope, "done");
+                                        e.get(scope, done_key.into()).map(|d| d.is_true())
+                                    })
+                                    .unwrap_or(true);
+                                if done {
+                                    break;
+                                }
+                                if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
+                                    let zero = v8::Integer::new(scope, 0).into();
+                                    let one = v8::Integer::new(scope, 1).into();
+                                    let k =
+                                        e.get(scope, zero).map(|v| v.to_rust_string_lossy(scope));
+                                    let v =
+                                        e.get(scope, one).map(|v| v.to_rust_string_lossy(scope));
+                                    if let (Some(k), Some(v)) = (k, v) {
+                                        extra_headers.insert(k, v);
+                                    }
                                 }
                             }
                         }
@@ -1439,7 +3064,7 @@ fn fetch_cb(
         headers: extra_headers,
     };
 
-    let (ok, status, status_text, body, content_type) =
+    let (ok, status, status_text, body, content_type, response_headers) =
         match incognidium_net::fetch_with_options(request) {
             Ok(resp) => {
                 eprintln!(
@@ -1463,6 +3088,7 @@ fn fetch_cb(
                     st.to_string(),
                     resp.body,
                     resp.content_type,
+                    resp.headers,
                 )
             }
             Err(e) => {
@@ -1473,11 +3099,13 @@ fn fetch_cb(
                     "Network Error".to_string(),
                     String::new(),
                     String::new(),
+                    std::collections::HashMap::new(),
                 )
             }
         };
 
-    // Build response object
+    // Build response object using shared helpers so both fetch() and the
+    // Response constructor expose the same surface.
     let resp_obj = v8::Object::new(scope);
     set_bool(scope, resp_obj, "ok", ok);
     set_int(scope, resp_obj, "status", status);
@@ -1485,95 +3113,39 @@ fn fetch_cb(
     set_str(scope, resp_obj, "__body", &body);
     set_str(scope, resp_obj, "__content_type", &content_type);
 
-    // .text() method
-    fn resp_text_cb(
-        scope: &mut v8::HandleScope,
-        args: v8::FunctionCallbackArguments,
-        mut rv: v8::ReturnValue,
-    ) {
-        let this = args.this();
-        let key = v8_str(scope, "__body");
-        let body = match this.get(scope, key.into()) {
-            Some(v) => match v.to_string(scope) {
-                Some(s) => s.to_rust_string_lossy(scope),
-                None => String::new(),
-            },
-            None => String::new(),
-        };
-        let ret = v8::Object::new(scope);
-        let body_val = v8_str(scope, &body);
-        let text_key = v8_str(scope, "__text");
-        ret.set(scope, text_key.into(), body_val.into());
-        set_fn(scope, ret, "then", resp_text_then_cb);
-        set_fn(scope, ret, "catch", noop);
-        set_fn(scope, ret, "finally", promise_finally_cb);
-        rv.set(ret.into());
-    }
-
-    // .json() method
-    fn resp_json_cb(
-        scope: &mut v8::HandleScope,
-        args: v8::FunctionCallbackArguments,
-        mut rv: v8::ReturnValue,
-    ) {
-        let this = args.this();
-        let key = v8_str(scope, "__body");
-        let body = match this.get(scope, key.into()) {
-            Some(v) => match v.to_string(scope) {
-                Some(s) => s.to_rust_string_lossy(scope),
-                None => String::new(),
-            },
-            None => String::new(),
-        };
-        let ret = v8::Object::new(scope);
-        let body_val = v8_str(scope, &body);
-        let json_key = v8_str(scope, "__json_text");
-        ret.set(scope, json_key.into(), body_val.into());
-        set_fn(scope, ret, "then", resp_json_then_cb);
-        set_fn(scope, ret, "catch", noop);
-        set_fn(scope, ret, "finally", promise_finally_cb);
-        rv.set(ret.into());
-    }
-
-    // Headers object with .get() method
-    fn headers_get_cb(
-        scope: &mut v8::HandleScope,
-        args: v8::FunctionCallbackArguments,
-        mut rv: v8::ReturnValue,
-    ) {
-        let this = args.this();
-        let name_key = v8_str(scope, "__name");
-        let name = match this.get(scope, name_key.into()) {
-            Some(v) => match v.to_string(scope) {
-                Some(s) => s.to_rust_string_lossy(scope),
-                None => String::new(),
-            },
-            None => String::new(),
-        };
-        let val = match name.as_str() {
-            "content-type" => {
-                let ct_key = v8_str(scope, "__content_type");
-                match this.get(scope, ct_key.into()) {
-                    Some(v) => match v.to_string(scope) {
-                        Some(s) => s.to_rust_string_lossy(scope),
-                        None => String::new(),
-                    },
-                    None => String::new(),
-                }
-            }
-            _ => String::new(),
-        };
-        rv.set(v8_str(scope, &val).into());
-    }
-    let headers_obj = v8::Object::new(scope);
-    set_str(scope, headers_obj, "__name", "");
-    set_str(scope, headers_obj, "__content_type", &content_type);
-    set_fn(scope, headers_obj, "get", headers_get_cb);
+    let headers_raw = response_headers
+        .iter()
+        .map(|(k, v)| format!("{}: {}", k.to_lowercase(), v))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let headers_obj = make_headers_object(scope, &headers_raw);
     let headers_key = v8_str(scope, "headers");
     resp_obj.set(scope, headers_key.into(), headers_obj.into());
 
+    let body_stream = make_body_stream(scope);
+    let body_key = v8_str(scope, "body");
+    resp_obj.set(scope, body_key.into(), body_stream.into());
+
     set_fn(scope, resp_obj, "text", resp_text_cb);
     set_fn(scope, resp_obj, "json", resp_json_cb);
+    set_fn(scope, resp_obj, "blob", noop_promise);
+    set_fn(scope, resp_obj, "arrayBuffer", noop_promise);
+    set_fn(scope, resp_obj, "formData", noop_promise);
+    set_fn(scope, resp_obj, "clone", noop);
+
+    // Make fetch() responses pass `instanceof Response` checks.
+    let global = scope.get_current_context().global(scope);
+    let resp_ctor_key = v8_str(scope, "Response");
+    if let Some(resp_ctor_val) = global.get(scope, resp_ctor_key.into()) {
+        if let Ok(resp_ctor) = v8::Local::<v8::Function>::try_from(resp_ctor_val) {
+            let proto_key = v8_str(scope, "prototype");
+            if let Some(proto_val) = resp_ctor.get(scope, proto_key.into()) {
+                if let Ok(proto) = v8::Local::<v8::Object>::try_from(proto_val) {
+                    let _ = resp_obj.set_prototype(scope, proto.into());
+                }
+            }
+        }
+    }
 
     // Build return fake-promise
     let ret = v8::Object::new(scope);
@@ -1681,6 +3253,21 @@ fn fetch_then_cb(
                 .map(|s| s.to_rust_string_lossy(tc))
                 .unwrap_or_default();
             eprintln!("[fetch then error] {}", err);
+            if let Some(ex) = tc.exception() {
+                if ex.is_object() {
+                    let stack_key = v8_str(tc, "stack");
+                    if let Some(obj) = ex.to_object(tc) {
+                        let stack = obj
+                            .get(tc, stack_key.into())
+                            .and_then(|s| s.to_string(tc))
+                            .map(|s| s.to_rust_string_lossy(tc))
+                            .unwrap_or_default();
+                        if !stack.is_empty() {
+                            eprintln!("[fetch then stack]\n{}", stack);
+                        }
+                    }
+                }
+            }
         }
     }
     wrap_thenable_or_value(scope, result, rv);
@@ -1693,6 +3280,227 @@ fn fetch_catch_cb(
 ) {
     // Synchronous fetch never rejects; return self for chaining
     rv.set(args.this().into());
+}
+
+/// Real `ReadableStream` constructor — many loaders and polyfills call
+/// `new ReadableStream(...)` or check `body instanceof ReadableStream`.
+fn readable_stream_ctor(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let obj = v8::Object::new(scope);
+    set_bool(scope, obj, "locked", false);
+    fn reader_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let reader = v8::Object::new(scope);
+        fn read_done_cb(
+            scope: &mut v8::HandleScope,
+            _args: v8::FunctionCallbackArguments,
+            mut rv: v8::ReturnValue,
+        ) {
+            let result = v8::Object::new(scope);
+            set_bool(scope, result, "done", true);
+            let value = v8::Array::new(scope, 0);
+            let value_key = v8_str(scope, "value");
+            result.set(scope, value_key.into(), value.into());
+            rv.set(result.into());
+        }
+        set_fn(scope, reader, "read", read_done_cb);
+        set_fn(scope, reader, "releaseLock", noop);
+        set_fn(scope, reader, "cancel", noop);
+        rv.set(reader.into());
+    }
+    set_fn(scope, obj, "getReader", reader_cb);
+    set_fn(scope, obj, "cancel", noop_promise);
+    rv.set(obj.into());
+}
+
+/// Real `WritableStream` constructor — scripts create writers with
+/// `.getWriter()` and call `writer.write(chunk)`.  Writes are accepted as
+/// no-ops because we do not have a real network sink.
+fn writable_stream_ctor(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let obj = v8::Object::new(scope);
+    fn get_writer_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let writer = v8::Object::new(scope);
+        fn write_cb(
+            scope: &mut v8::HandleScope,
+            _args: v8::FunctionCallbackArguments,
+            mut rv: v8::ReturnValue,
+        ) {
+            let ret = v8::Object::new(scope);
+            set_fn(scope, ret, "then", resolved_then_cb);
+            set_fn(scope, ret, "catch", noop);
+            set_fn(scope, ret, "finally", promise_finally_cb);
+            rv.set(ret.into());
+        }
+        set_fn(scope, writer, "write", write_cb);
+        set_fn(scope, writer, "close", noop_promise);
+        set_fn(scope, writer, "abort", noop_promise);
+        set_fn(scope, writer, "releaseLock", noop);
+        rv.set(writer.into());
+    }
+    set_fn(scope, obj, "getWriter", get_writer_cb);
+    set_bool(scope, obj, "locked", false);
+    rv.set(obj.into());
+}
+
+/// Real `Response` constructor — enough for `new Response(body, init)` and for
+/// our `fetch()` to return objects that pass `instanceof Response` checks.
+fn response_ctor(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let obj = v8::Object::new(scope);
+    let body = if args.length() > 0 {
+        args.get(0)
+    } else {
+        v8::undefined(scope).into()
+    };
+    let opts = if args.length() > 1 {
+        args.get(1)
+    } else {
+        v8::undefined(scope).into()
+    };
+    let mut status = 200;
+    let mut status_text = "OK".to_string();
+    let mut headers_raw = String::new();
+    if opts.is_object() {
+        if let Some(opts_obj) = opts.to_object(scope) {
+            let status_key = v8_str(scope, "status");
+            if let Some(sv) = opts_obj.get(scope, status_key.into()) {
+                if let Some(n) = sv.to_number(scope) {
+                    status = n.value() as i32;
+                }
+            }
+            let status_text_key = v8_str(scope, "statusText");
+            if let Some(stv) = opts_obj.get(scope, status_text_key.into()) {
+                status_text = stv.to_rust_string_lossy(scope);
+            }
+            let headers_key = v8_str(scope, "headers");
+            if let Some(hv) = opts_obj.get(scope, headers_key.into()) {
+                if let Some(hobj) = hv.to_object(scope) {
+                    let entries_key = v8_str(scope, "entries");
+                    if let Some(entries_fn) = hobj
+                        .get(scope, entries_key.into())
+                        .and_then(|e| e.try_into().ok())
+                    {
+                        let entries: v8::Local<v8::Function> = entries_fn;
+                        let this: v8::Local<v8::Value> = hobj.into();
+                        let undef = v8::undefined(scope).into();
+                        if let Some(iter) = entries.call(scope, this, &[undef]) {
+                            let next_key = v8_str(scope, "next");
+                            if let Some(next_fn) = iter.to_object(scope).and_then(|o| {
+                                o.get(scope, next_key.into())
+                                    .and_then(|n| n.try_into().ok())
+                            }) {
+                                let next: v8::Local<v8::Function> = next_fn;
+                                let iter_val: v8::Local<v8::Value> = iter;
+                                loop {
+                                    let undef = v8::undefined(scope).into();
+                                    let entry = next.call(scope, iter_val, &[undef]);
+                                    let done = entry
+                                        .and_then(|e| e.to_object(scope))
+                                        .and_then(|e| {
+                                            let done_key = v8_str(scope, "done");
+                                            e.get(scope, done_key.into()).map(|d| d.is_true())
+                                        })
+                                        .unwrap_or(true);
+                                    if done {
+                                        break;
+                                    }
+                                    if let Some(e) = entry.and_then(|e| e.to_object(scope)) {
+                                        let zero = v8::Integer::new(scope, 0).into();
+                                        let one = v8::Integer::new(scope, 1).into();
+                                        let k = e
+                                            .get(scope, zero)
+                                            .map(|v| v.to_rust_string_lossy(scope));
+                                        let v = e
+                                            .get(scope, one)
+                                            .map(|v| v.to_rust_string_lossy(scope));
+                                        if let (Some(k), Some(v)) = (k, v) {
+                                            if !headers_raw.is_empty() {
+                                                headers_raw.push('\n');
+                                            }
+                                            headers_raw.push_str(&format!(
+                                                "{}: {}",
+                                                k.to_lowercase(),
+                                                v
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set_bool(scope, obj, "ok", status >= 200 && status < 300);
+    set_int(scope, obj, "status", status);
+    set_str(scope, obj, "statusText", &status_text);
+    // body: if a string/undefined/null, expose a readable stream so the
+    // surface matches `Response.prototype.body` expectations.
+    if body.is_string() || body.is_undefined() || body.is_null() {
+        let body_stream = v8::Object::new(scope);
+        fn body_reader_cb(
+            scope: &mut v8::HandleScope,
+            _args: v8::FunctionCallbackArguments,
+            mut rv: v8::ReturnValue,
+        ) {
+            let reader = v8::Object::new(scope);
+            fn read_done_cb(
+                scope: &mut v8::HandleScope,
+                _args: v8::FunctionCallbackArguments,
+                mut rv: v8::ReturnValue,
+            ) {
+                let result = v8::Object::new(scope);
+                set_bool(scope, result, "done", true);
+                let value = v8::Array::new(scope, 0);
+                let value_key = v8_str(scope, "value");
+                result.set(scope, value_key.into(), value.into());
+                rv.set(result.into());
+            }
+            set_fn(scope, reader, "read", read_done_cb);
+            set_fn(scope, reader, "releaseLock", noop);
+            set_fn(scope, reader, "cancel", noop);
+            rv.set(reader.into());
+        }
+        set_fn(scope, body_stream, "getReader", body_reader_cb);
+        set_bool(scope, body_stream, "locked", false);
+        let body_key = v8_str(scope, "body");
+        obj.set(scope, body_key.into(), body_stream.into());
+    }
+    let headers_obj = v8::Object::new(scope);
+    set_str(scope, headers_obj, "__headers_raw", &headers_raw);
+    set_fn(scope, headers_obj, "get", fetch_headers_get_cb);
+    set_fn(scope, headers_obj, "has", fetch_headers_has_cb);
+    set_fn(scope, headers_obj, "set", fetch_headers_set_cb);
+    set_fn(scope, headers_obj, "append", fetch_headers_append_cb);
+    set_fn(scope, headers_obj, "delete", fetch_headers_delete_cb);
+    set_fn(scope, headers_obj, "forEach", fetch_headers_for_each_cb);
+    let hk = v8_str(scope, "headers");
+    obj.set(scope, hk.into(), headers_obj.into());
+    set_fn(scope, obj, "text", resp_text_cb);
+    set_fn(scope, obj, "json", resp_json_cb);
+    set_fn(scope, obj, "blob", noop_promise);
+    set_fn(scope, obj, "arrayBuffer", noop_promise);
+    set_fn(scope, obj, "formData", noop_promise);
+    set_fn(scope, obj, "clone", noop);
+    rv.set(obj.into());
 }
 
 /// Generic `.then` for a resolved fake-promise (chains indefinitely).
@@ -2207,8 +4015,18 @@ fn serialize_node_to_html(
                 html.push('>');
             }
 
-            // Serialize children
-            for child_id in &node.children {
+            // Compose shadow-root children before light-DOM children. Lit and
+            // similar frameworks render into the shadow root and leave any
+            // light-DOM children as fallback/slot content, so shadow content
+            // should appear first in serialized output.
+            let mut child_ids: Vec<NodeId> = Vec::new();
+            if let Some(shadow_id) = el.shadow_root {
+                if let Some(shadow) = doc.nodes.get(shadow_id) {
+                    child_ids.extend(&shadow.children);
+                }
+            }
+            child_ids.extend(&node.children);
+            for child_id in &child_ids {
                 html.push_str(&serialize_node_to_html(*child_id, doc, false, visited));
             }
 
@@ -2229,6 +4047,21 @@ fn serialize_node_to_html(
         }
         _ => String::new(),
     }
+}
+
+/// Serialize the entire document starting from its root element.
+pub fn serialize_document_to_html(doc: &Document) -> String {
+    let mut html = String::new();
+    let mut visited = std::collections::HashSet::new();
+    let root_id = doc.root();
+    let root = match doc.nodes.get(root_id) {
+        Some(n) => n,
+        None => return html,
+    };
+    for child_id in &root.children {
+        html.push_str(&serialize_node_to_html(*child_id, doc, false, &mut visited));
+    }
+    html
 }
 
 /// Serialize only the children (innerHTML).
@@ -2664,6 +4497,24 @@ fn request_animation_frame_cb(
     rv.set(v8::Integer::new(scope, 1).into());
 }
 
+/// requestIdleCallback(callback, options) — schedule the callback via setTimeout
+/// so idle work (telemetry, lazy loaders) actually runs. The deadline object
+/// reports plenty of remaining time since we are not a real event loop.
+fn request_idle_callback_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let cb = args.get(0);
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(cb) {
+        let deadline = v8::Object::new(scope);
+        set_num(scope, deadline, "didTimeout", 0.0);
+        set_num(scope, deadline, "timeRemaining", 50.0);
+        queue_timeout(scope, func, vec![deadline.into()]);
+    }
+    rv.set(v8::Integer::new(scope, 1).into());
+}
+
 /// cancelAnimationFrame(id) — no-op since we execute synchronously.
 fn cancel_animation_frame_cb(
     _scope: &mut v8::HandleScope,
@@ -2686,6 +4537,57 @@ fn queue_microtask_cb(
 }
 
 // ── dynamic tree-property accessor ─────────────────────────────────────────
+
+fn element_id_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(v8_str(scope, "").into());
+            return;
+        }
+    };
+    let id = with_dom(|state| {
+        if let NodeData::Element(ref el) = state.document.nodes[node_id].data {
+            el.attributes.get("id").cloned()
+        } else {
+            None
+        }
+    });
+    rv.set(v8_str(scope, &id.unwrap_or_default()).into());
+}
+
+fn element_id_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let this = args.this();
+    let node_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => return,
+    };
+    let id = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    with_dom(|state| {
+        if let NodeData::Element(ref mut el) = state.document.nodes[node_id].data {
+            if id.is_empty() {
+                el.attributes.remove("id");
+            } else {
+                el.attributes.insert("id".to_string(), id);
+            }
+        }
+    });
+}
 
 /// Minimal `element.attributes` accessor. jQuery/Sizzle support tests read
 /// `elem.attributes[name].expando`, and many sites enumerate attributes.
@@ -2712,13 +4614,19 @@ fn attributes_getter_cb(
     });
     let map = v8::Object::new(scope);
     let len = attrs.len();
+    let mut i = 0i32;
     for (name, value) in attrs {
         let attr_obj = v8::Object::new(scope);
         set_str(scope, attr_obj, "name", &name);
         set_str(scope, attr_obj, "value", &value);
         set_bool(scope, attr_obj, "expando", false);
+        // Named access (elem.attributes.id)
         let key = v8_str(scope, &name);
         let _ = map.set(scope, key.into(), attr_obj.into());
+        // Indexed access (elem.attributes[0])
+        let idx_key = v8::Integer::new(scope, i);
+        let _ = map.set(scope, idx_key.into(), attr_obj.into());
+        i += 1;
     }
     set_int(scope, map, "length", len as i32);
     rv.set(map.into());
@@ -2761,7 +4669,7 @@ fn clone_and_append_fragment_node(
     if let NodeData::Element(ref el) = frag.nodes[frag_id].data {
         if el.tag_name == "script" {
             let child_val = wrap_element(scope, new_id).into();
-            execute_appended_script_if_needed(scope, child_val, new_id);
+            enqueue_pending_dynamic_script(scope, child_val);
         }
     }
 }
@@ -2856,6 +4764,458 @@ fn global_remove_event_listener_cb(
 ) {
     // Removing specific listeners by function identity is expensive in V8
     // globals; for now removal is a no-op.  Pages rarely depend on it.
+}
+
+fn template_content_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let template_id = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set_null();
+            return;
+        }
+    };
+    let frag = make_template_content_fragment(scope, template_id);
+    rv.set(frag.into());
+}
+
+fn is_document_fragment(scope: &mut v8::HandleScope, val: v8::Local<v8::Value>) -> bool {
+    let obj = match val.to_object(scope) {
+        Some(o) => o,
+        None => return false,
+    };
+    get_prop(scope, obj, "__incognidium_is_document_fragment__")
+        .map(|v| v.is_true())
+        .unwrap_or(false)
+}
+
+fn fragment_template_node_id(
+    scope: &mut v8::HandleScope,
+    val: v8::Local<v8::Value>,
+) -> Option<NodeId> {
+    let obj = val.to_object(scope)?;
+    let nid = get_prop(scope, obj, "__incognidium_template_node_id__")?;
+    nid.int32_value(scope).map(|n| n as NodeId)
+}
+
+fn document_fragment_query_selector_all_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        rv.set(v8::Array::new(scope, 0).into());
+        return;
+    };
+    let sel = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+
+    let nids = with_dom(|state| {
+        let mut results = Vec::new();
+        let sel_trim = sel.trim();
+        let Some(template_node) = state.document.nodes.get(template_id) else {
+            return results;
+        };
+        let root_ids: Vec<NodeId> = template_node.children.clone();
+        for root_id in root_ids {
+            walk_dom_nodes(&state.document, root_id, |id| {
+                if id == root_id {
+                    return;
+                }
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    let matched = match_simple_selector(el, sel_trim);
+                    if matched {
+                        results.push(id);
+                    }
+                }
+            });
+        }
+        results
+    });
+
+    let arr = v8::Array::new(scope, nids.len() as i32);
+    for (i, &nid) in nids.iter().enumerate() {
+        let el = wrap_element(scope, nid);
+        arr.set_index(scope, i as u32, el.into());
+    }
+    rv.set(arr.into());
+}
+
+fn document_fragment_query_selector_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        rv.set_null();
+        return;
+    };
+    let sel = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+
+    let found = with_dom(|state| {
+        let sel_trim = sel.trim();
+        let Some(template_node) = state.document.nodes.get(template_id) else {
+            return None;
+        };
+        let root_ids: Vec<NodeId> = template_node.children.clone();
+        for root_id in root_ids {
+            let mut result = None;
+            walk_dom_nodes(&state.document, root_id, |id| {
+                if id == root_id || result.is_some() {
+                    return;
+                }
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    let matched = match_simple_selector(el, sel_trim);
+                    if matched {
+                        result = Some(id);
+                    }
+                }
+            });
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
+    });
+
+    match found {
+        Some(nid) => rv.set(wrap_element(scope, nid).into()),
+        None => rv.set_null(),
+    }
+}
+
+fn make_template_content_fragment<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    template_id: NodeId,
+) -> v8::Local<'s, v8::Object> {
+    let frag = v8::Object::new(scope);
+    set_bool(scope, frag, "__incognidium_is_document_fragment__", true);
+    set_int(
+        scope,
+        frag,
+        "__incognidium_template_node_id__",
+        template_id as i32,
+    );
+    set_int(scope, frag, "nodeType", 11);
+    set_str(scope, frag, "nodeName", "#document-fragment");
+    set_str(scope, frag, "tagName", "");
+    let child_nodes_key = v8_str(scope, "childNodes");
+    let _ = frag.set_accessor(
+        scope,
+        child_nodes_key.into(),
+        document_fragment_child_nodes_getter_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "querySelector",
+        document_fragment_query_selector_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "querySelectorAll",
+        document_fragment_query_selector_all_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "getElementById",
+        document_fragment_get_element_by_id_cb,
+    );
+    set_fn(
+        scope,
+        frag,
+        "appendChild",
+        document_fragment_append_child_cb,
+    );
+    set_fn(scope, frag, "append", document_fragment_append_cb);
+    frag
+}
+
+fn document_fragment_child_nodes_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        rv.set(v8::Array::new(scope, 0).into());
+        return;
+    };
+    let ids = with_dom(|state| {
+        state
+            .document
+            .nodes
+            .get(template_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default()
+    });
+    let arr = v8::Array::new(scope, ids.len() as i32);
+    for (i, &cid) in ids.iter().enumerate() {
+        let el = wrap_element_shallow(scope, cid);
+        arr.set_index(scope, i as u32, el.into());
+    }
+    rv.set(arr.into());
+}
+
+fn document_fragment_get_element_by_id_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        rv.set_null();
+        return;
+    };
+    let id = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let found = with_dom(|state| {
+        let Some(template_node) = state.document.nodes.get(template_id) else {
+            return None;
+        };
+        let root_ids: Vec<NodeId> = template_node.children.clone();
+        for root_id in root_ids {
+            let mut result = None;
+            walk_dom_nodes(&state.document, root_id, |nid| {
+                if nid == root_id || result.is_some() {
+                    return;
+                }
+                if let NodeData::Element(ref el) = state.document.nodes[nid].data {
+                    if el.attributes.get("id").map(|v| v == &id).unwrap_or(false) {
+                        result = Some(nid);
+                    }
+                }
+            });
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
+    });
+    match found {
+        Some(nid) => rv.set(wrap_element(scope, nid).into()),
+        None => rv.set_null(),
+    }
+}
+
+fn document_fragment_append_child_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        rv.set_null();
+        return;
+    };
+    let new_child = match extract_node_id(scope, args.get(0)) {
+        Some(n) => n,
+        None => {
+            rv.set_null();
+            return;
+        }
+    };
+    with_dom(|state| {
+        if let Some(old_parent) = state.document.nodes[new_child].parent {
+            state.document.nodes[old_parent]
+                .children
+                .retain(|&c| c != new_child);
+        }
+        state.document.nodes[new_child].parent = Some(template_id);
+        state.document.nodes[template_id].children.push(new_child);
+    });
+    rv.set(args.get(0));
+}
+
+fn document_fragment_append_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let Some(template_id) = fragment_template_node_id(scope, this.into()) else {
+        return;
+    };
+    let mut ids = Vec::new();
+    for i in 0..args.length() {
+        if let Some(nid) = extract_node_id(scope, args.get(i)) {
+            ids.push(nid);
+        } else if args.get(i).is_string() {
+            let text = args.get(i).to_rust_string_lossy(scope);
+            let text_id = with_dom(|state| {
+                let id = state.document.nodes.len();
+                state.document.nodes.push(Node {
+                    id,
+                    parent: None,
+                    children: Vec::new(),
+                    data: NodeData::Text(TextData { content: text }),
+                });
+                id
+            });
+            let _ = wrap_element(scope, text_id);
+            ids.push(text_id);
+        }
+    }
+    with_dom(|state| {
+        for &id in &ids {
+            if let Some(old_parent) = state.document.nodes[id].parent {
+                state.document.nodes[old_parent]
+                    .children
+                    .retain(|&c| c != id);
+            }
+            state.document.nodes[id].parent = Some(template_id);
+            state.document.nodes[template_id].children.push(id);
+        }
+    });
+}
+
+/// Parse a single compound CSS selector fragment (no combinators/spaces) and
+/// test whether it matches the given element. This is used by the JS
+/// `querySelector`/`querySelectorAll` stubs, which only need to handle the
+/// simple selectors real sites generate dynamically.
+fn match_simple_selector(el: &incognidium_dom::ElementData, sel_trim: &str) -> bool {
+    let mut rest = sel_trim.trim();
+    if rest.is_empty() {
+        return false;
+    }
+
+    // Optional tag name prefix, e.g. `template[for="x"]`.
+    if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        let tag_end = rest
+            .find(|c: char| c == '[' || c == '.' || c == '#')
+            .unwrap_or(rest.len());
+        let tag = &rest[..tag_end];
+        rest = &rest[tag_end..];
+        if !tag.eq_ignore_ascii_case(&el.tag_name) {
+            return false;
+        }
+    }
+
+    // If the selector was just a tag name, the tag test above is the whole
+    // match. (An empty selector with no tag prefix is rejected by the guard
+    // at the top of this function, so reaching here with empty `rest` implies
+    // a tag prefix matched.)
+    if rest.is_empty() {
+        return true;
+    }
+
+    // Process class, id, and attribute suffixes in order.
+    while !rest.is_empty() {
+        if let Some(suffix) = rest.strip_prefix('.') {
+            let end = suffix
+                .find(|c: char| c == '[' || c == '.' || c == '#')
+                .unwrap_or(suffix.len());
+            let class_name = &suffix[..end];
+            rest = &suffix[end..];
+            let class_attr = el.attributes.get("class");
+            if !class_attr
+                .map(|c| c.split_whitespace().any(|w| w == class_name))
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        } else if let Some(suffix) = rest.strip_prefix('#') {
+            let end = suffix
+                .find(|c: char| c == '[' || c == '.' || c == '#')
+                .unwrap_or(suffix.len());
+            let id_name = &suffix[..end];
+            rest = &suffix[end..];
+            if el
+                .attributes
+                .get("id")
+                .map(|v| v != id_name)
+                .unwrap_or(true)
+            {
+                return false;
+            }
+        } else if rest.starts_with('[') {
+            let close = match rest[1..].find(']') {
+                Some(i) => i + 1,
+                None => return false,
+            };
+            let inner = &rest[1..close];
+            rest = &rest[close + 1..];
+            if !match_attribute_selector(el, inner) {
+                return false;
+            }
+        } else {
+            // Unrecognised token; fail closed.
+            return false;
+        }
+    }
+
+    true
+}
+
+fn match_attribute_selector(el: &incognidium_dom::ElementData, inner: &str) -> bool {
+    let ops = ["*=", "^=", "$=", "~=", "|="];
+    for op in ops {
+        if let Some(pos) = inner.find(op) {
+            let attr = inner[..pos].trim();
+            let val = inner[pos + op.len()..].trim();
+            let val_clean = val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| {
+                    val.strip_prefix('\u{0027}')
+                        .and_then(|v| v.strip_suffix('\u{0027}'))
+                })
+                .unwrap_or(val);
+            let attr_val = el.attributes.get(attr);
+            return match op {
+                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
+                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
+                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
+                "~=" => attr_val
+                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
+                    .unwrap_or(false),
+                "|=" => attr_val
+                    .map(|v| v == val_clean || v.starts_with(&format!("{}-", val_clean)))
+                    .unwrap_or(false),
+                _ => false,
+            };
+        }
+    }
+    // Plain equality: `[attr=value]` or `[attr="value"]`.
+    if let Some(pos) = inner.find('=') {
+        let attr = inner[..pos].trim();
+        let val = inner[pos + 1..].trim();
+        let val_clean = val
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| {
+                val.strip_prefix('\u{0027}')
+                    .and_then(|v| v.strip_suffix('\u{0027}'))
+            })
+            .unwrap_or(val);
+        return el
+            .attributes
+            .get(attr)
+            .map(|v| v == val_clean)
+            .unwrap_or(false);
+    }
+    let attr = inner.trim();
+    el.attributes.contains_key(attr)
 }
 
 enum TreeVal {
@@ -3014,6 +5374,11 @@ fn install_form_input_apis(scope: &mut v8::HandleScope, obj: v8::Local<v8::Objec
         || lc_tag == "textarea"
         || lc_tag == "button";
     if !is_form_or_input {
+        // iframe feature-detection (es-module-shims, etc.) expects
+        // contentDocument with write/head/createElement/appendChild.
+        if lc_tag == "iframe" {
+            install_iframe_apis(scope, obj);
+        }
         return;
     }
 
@@ -3021,6 +5386,7 @@ fn install_form_input_apis(scope: &mut v8::HandleScope, obj: v8::Local<v8::Objec
     // wrapped before the DOM under it was complete. Always reinstall these APIs
     // for form-like elements.
     if lc_tag == "form" {
+        set_fn(scope, obj, "submit", form_submit_cb);
         set_fn(scope, obj, "requestSubmit", form_request_submit_cb);
         let elements_key = v8_str(scope, "elements");
         if let Some(form_id) = node_id_opt {
@@ -3126,6 +5492,13 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         set_str(scope, obj, "nodeName", &tag);
         let lc = tag.to_lowercase();
         set_str(scope, obj, "localName", &lc);
+        // `<template>` elements expose a DocumentFragment `.content` containing
+        // their template children. Required by SSR hydration patterns such as
+        // template promotion used by SSR hydration.
+        if lc == "template" {
+            let content_key = v8_str(scope, "content");
+            let _ = obj.set_accessor(scope, content_key.into(), template_content_getter_cb);
+        }
         // `<style>` and `<link>` elements expose a `sheet` with `cssRules`; many
         // sites read it to decide whether styles have loaded.
         if lc == "style" || lc == "link" {
@@ -3136,7 +5509,14 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
             let sheet_key = v8_str(scope, "sheet");
             let _ = obj.set(scope, sheet_key.into(), sheet.into());
         }
-        set_str(scope, obj, "id", &id_attr.unwrap_or_default());
+        // Reflect element.id to the id attribute, matching real DOM behavior.
+        let id_key = v8_str(scope, "id");
+        let _ = obj.set_accessor_with_setter(
+            scope,
+            id_key.into(),
+            element_id_getter_cb,
+            element_id_setter_cb,
+        );
         let cn_key = v8_str(scope, "className");
         let _ = obj.set_accessor_with_setter(
             scope,
@@ -3230,6 +5610,9 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
         let _ = obj.set_accessor(scope, client_width_key.into(), client_width_getter_cb);
         let client_height_key = v8_str(scope, "clientHeight");
         let _ = obj.set_accessor(scope, client_height_key.into(), client_height_getter_cb);
+        // HTMLScriptElement polyfill signals: modern browsers support noModule.
+        set_bool(scope, obj, "noModule", false);
+
         set_int(scope, obj, "clientTop", 0);
         set_int(scope, obj, "clientLeft", 0);
 
@@ -3271,6 +5654,8 @@ fn wrap_element<'s>(scope: &mut v8::HandleScope<'s>, node_id: NodeId) -> v8::Loc
     set_fn(scope, obj, "removeChild", remove_child_cb);
     set_fn(scope, obj, "insertBefore", insert_before_cb);
     set_fn(scope, obj, "replaceChild", replace_child_cb);
+    set_fn(scope, obj, "attachShadow", element_attach_shadow_cb);
+    set_fn(scope, obj, "getRootNode", element_get_root_node_cb);
     set_fn(scope, obj, "cloneNode", clone_node_cb);
     set_fn(scope, obj, "remove", remove_cb);
     set_fn(scope, obj, "setAttribute", set_attribute_cb);
@@ -4901,7 +7286,7 @@ fn append_child_cb(
         state.document.nodes[child].parent = Some(parent);
         state.document.nodes[parent].children.push(child);
     });
-    execute_appended_script_if_needed(scope, child_val, child);
+    enqueue_pending_dynamic_script(scope, child_val);
     rv.set(child_val);
 }
 
@@ -4945,7 +7330,7 @@ fn append_cb(
                     state.document.nodes[child].parent = Some(parent);
                     state.document.nodes[parent].children.push(child);
                 });
-                execute_appended_script_if_needed(scope, arg, child);
+                enqueue_pending_dynamic_script(scope, arg);
             }
         }
     }
@@ -4991,7 +7376,7 @@ fn prepend_cb(
                     state.document.nodes[child].parent = Some(parent);
                 });
                 new_children.push(child);
-                execute_appended_script_if_needed(scope, arg, child);
+                enqueue_pending_dynamic_script(scope, arg);
             }
         }
     }
@@ -5193,6 +7578,21 @@ fn add_event_listener_cb(
         return;
     }
 
+    // If a real function is registered, store it as a V8 global keyed by node
+    // id and event type so we can dispatch script lifecycle events (load/error)
+    // on the element wrapper itself.
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(handler) {
+        let global = v8::Global::new(scope, func);
+        ELEMENT_EVENT_LISTENERS.with(|m| {
+            m.borrow_mut()
+                .entry(nid)
+                .or_default()
+                .entry(event_type.clone())
+                .or_default()
+                .push(global);
+        });
+    }
+
     with_dom(|state| {
         if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
             el.event_listeners.push(incognidium_dom::EventListener {
@@ -5230,6 +7630,39 @@ fn remove_event_listener_cb(
             el.event_listeners.retain(|l| l.event_type != event_type);
         }
     });
+}
+
+/// Document-level `addEventListener`. Stores listeners in
+/// `DOCUMENT_EVENT_LISTENERS` so document lifecycle events such as
+/// `readystatechange` can be dispatched from Rust.
+fn document_add_event_listener_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    let event_type = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let handler = args.get(1);
+    if event_type.is_empty() {
+        return;
+    }
+    if let Ok(func) = v8::Local::<v8::Function>::try_from(handler) {
+        let global = v8::Global::new(scope, func);
+        DOCUMENT_EVENT_LISTENERS.with(|m| {
+            m.borrow_mut().entry(event_type).or_default().push(global);
+        });
+    }
+}
+
+fn document_remove_event_listener_cb(
+    _scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
+    // Removal by function identity is expensive; callers rarely depend on it.
 }
 
 fn dispatch_event_cb(
@@ -5438,8 +7871,35 @@ fn insert_before_cb(
         };
         state.document.nodes[parent].children.insert(idx, new_id);
     });
-    execute_appended_script_if_needed(scope, new_val, new_id);
+    enqueue_pending_dynamic_script(scope, new_val);
     rv.set(new_val);
+}
+
+fn dispatch_attribute_changed(
+    scope: &mut v8::HandleScope,
+    this: v8::Local<v8::Object>,
+    name: &str,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+) {
+    let method_name = v8_str(scope, "attributeChangedCallback");
+    let method = match this.get(scope, method_name.into()) {
+        Some(v) if v.is_function() => v,
+        _ => return,
+    };
+    let method = match v8::Local::<v8::Function>::try_from(method) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let name_val = v8_str(scope, name);
+    let old_val = old_value
+        .map(|s| v8_str(scope, s).into())
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    let new_val = new_value
+        .map(|s| v8_str(scope, s).into())
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    let recv: v8::Local<v8::Value> = this.into();
+    let _ = method.call(scope, recv, &[name_val.into(), old_val, new_val]);
 }
 
 fn set_attribute_cb(
@@ -5456,17 +7916,23 @@ fn set_attribute_cb(
         .get(0)
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let value = args
         .get(1)
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    with_dom(|state| {
+    let old_value = with_dom(|state| {
         if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
-            el.attributes.insert(name, value);
+            let old = el.attributes.get(&name).cloned();
+            el.attributes.insert(name.clone(), value.clone());
+            old
+        } else {
+            None
         }
     });
+    dispatch_attribute_changed(scope, this, &name, old_value.as_deref(), Some(&value));
 }
 
 fn get_attribute_cb(
@@ -5486,7 +7952,8 @@ fn get_attribute_cb(
         .get(0)
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let result = with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[nid].data {
             el.attributes.get(&name).cloned()
@@ -5520,7 +7987,8 @@ fn has_attribute_cb(
         .get(0)
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let result = with_dom(|state| {
         if let NodeData::Element(ref el) = state.document.nodes[nid].data {
             el.attributes.contains_key(&name)
@@ -5545,12 +8013,16 @@ fn remove_attribute_cb(
         .get(0)
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    with_dom(|state| {
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let old_value = with_dom(|state| {
         if let NodeData::Element(ref mut el) = state.document.nodes[nid].data {
-            el.attributes.remove(&name);
+            el.attributes.remove(&name)
+        } else {
+            None
         }
     });
+    dispatch_attribute_changed(scope, this, &name, old_value.as_deref(), None);
 }
 
 fn element_src_getter_cb(
@@ -6430,9 +8902,7 @@ fn get_element_by_id_cb(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    eprintln!("[JS] getElementById({})", id);
     let nid = with_dom(|state| state.document.get_element_by_id(&id));
-    eprintln!("[JS] getElementById result: {:?}", nid);
     match nid {
         Some(n) => {
             let obj = wrap_element(scope, n);
@@ -6461,6 +8931,20 @@ fn create_element<'s>(scope: &mut v8::HandleScope<'s>, tag: &str) -> v8::Local<'
 }
 
 fn create_element_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let tag = args
+        .get(0)
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_else(|| "div".into());
+    let obj = create_element(scope, &tag);
+    rv.set(obj.into());
+}
+
+fn create_element_for_js_cb(
     scope: &mut v8::HandleScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue,
@@ -6524,6 +9008,13 @@ fn create_document_fragment_cb(
     let obj = wrap_element(scope, node_id);
 
     // Mark it as a DocumentFragment by adding a special property
+    set_bool(scope, obj, "__incognidium_is_document_fragment__", true);
+    set_int(
+        scope,
+        obj,
+        "__incognidium_template_node_id__",
+        node_id as i32,
+    );
     set_str(scope, obj, "nodeName", "#document-fragment");
     set_int(scope, obj, "nodeType", 11); // DOCUMENT_FRAGMENT_NODE
 
@@ -6682,6 +9173,14 @@ fn adopt_node_cb(
     // The node is effectively moved to this document
     let node_val = args.get(0);
 
+    // DocumentFragment objects created by `<template>.content` have no
+    // backing node id; just return them. The children will be moved by the
+    // caller (e.g. `replaceWith`) from the template parent.
+    if is_document_fragment(scope, node_val) {
+        rv.set(node_val);
+        return;
+    }
+
     let node_id = match extract_node_id(scope, node_val) {
         Some(id) => id,
         None => {
@@ -6713,10 +9212,32 @@ fn query_selector_cb(
         .to_string(scope)
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
+
+    let debug = std::env::var_os("INCOGNIDIUM_DEBUG_QS").is_some();
+
     let nid = with_dom(|state| {
-        let bridge = murkiu_bindings::DomBridge::new(state.document.clone());
-        bridge.query_selector(&sel)
+        let sel_trim = sel.trim();
+        let mut found = None;
+        if let Some(html_id) = state.document.document_element() {
+            walk_dom_nodes(&state.document, html_id, |id| {
+                if found.is_none() {
+                    if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                        if match_simple_selector(el, sel_trim) {
+                            found = Some(id);
+                        }
+                    }
+                }
+            });
+        }
+        if debug {
+            eprintln!(
+                "[qs debug] document.querySelector({:?}) -> {:?}",
+                sel_trim, found
+            );
+        }
+        found
     });
+
     match nid {
         Some(n) => {
             let obj = wrap_element(scope, n);
@@ -6768,73 +9289,16 @@ fn query_selector_all_cb(
         .unwrap_or_default();
 
     let nids = with_dom(|state| {
-        // Simple selector matching without using DomBridge
         let mut results = Vec::new();
         let sel_trim = sel.trim();
-
-        fn matches_selector(doc: &Document, node_id: NodeId, sel: &str) -> bool {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                let sel_trim = sel.trim();
-
-                // Class selector
-                if sel_trim.starts_with('.') {
-                    let class_name = &sel_trim[1..];
-                    if let Some(class_attr) = el.attributes.get("class") {
-                        let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                        return classes.contains(&class_name);
-                    }
-                    return false;
-                }
-
-                // ID selector
-                if sel_trim.starts_with('#') {
-                    let id = &sel_trim[1..];
-                    return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
-                }
-
-                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
-                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len() - 1];
-                    // Find operator
-                    let ops = ["*=", "^=", "$=", "~="];
-                    for op in ops {
-                        if let Some(pos) = inner.find(op) {
-                            let attr = inner[..pos].trim();
-                            let val = inner[pos + op.len()..].trim();
-                            // Remove quotes
-                            let val_clean = val
-                                .strip_prefix('"')
-                                .and_then(|v| v.strip_suffix('"'))
-                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
-                                .unwrap_or(val);
-                            let attr_val = el.attributes.get(attr);
-                            return match op {
-                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
-                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
-                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val
-                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
-                                    .unwrap_or(false),
-                                _ => false,
-                            };
-                        }
-                    }
-                    // No operator - just check attribute exists
-                    let attr = inner.trim();
-                    return el.attributes.contains_key(attr);
-                }
-
-                // Tag selector
-                return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
-            }
-            false
-        }
 
         // Start from document element (html) if it exists
         if let Some(html_id) = state.document.document_element() {
             walk_dom_nodes(&state.document, html_id, |id| {
-                if matches_selector(&state.document, id, sel_trim) {
-                    results.push(id);
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    if match_simple_selector(el, sel_trim) {
+                        results.push(id);
+                    }
                 }
             });
         }
@@ -6958,60 +9422,10 @@ fn element_query_selector_cb(
         .map(|s| s.to_rust_string_lossy(scope))
         .unwrap_or_default();
 
+    let debug = std::env::var_os("INCOGNIDIUM_DEBUG_QS").is_some();
+
     let nid = with_dom(|state| {
         let sel_trim = sel.trim();
-
-        fn matches_selector(doc: &Document, node_id: NodeId, sel: &str) -> bool {
-            if let NodeData::Element(ref el) = doc.nodes[node_id].data {
-                let sel_trim = sel.trim();
-
-                if sel_trim.starts_with('.') {
-                    let class_name = &sel_trim[1..];
-                    if let Some(class_attr) = el.attributes.get("class") {
-                        let classes: Vec<&str> = class_attr.split_whitespace().collect();
-                        return classes.contains(&class_name);
-                    }
-                    return false;
-                }
-
-                if sel_trim.starts_with('#') {
-                    let id = &sel_trim[1..];
-                    return el.attributes.get("id").map(|v| v == id).unwrap_or(false);
-                }
-
-                // Attribute selector: [attr], [attr="val"], [attr*="val"], [attr^="val"], [attr$="val"]
-                if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                    let inner = &sel_trim[1..sel_trim.len() - 1];
-                    let ops = ["*=", "^=", "$=", "~="];
-                    for op in ops {
-                        if let Some(pos) = inner.find(op) {
-                            let attr = inner[..pos].trim();
-                            let val = inner[pos + op.len()..].trim();
-                            let val_clean = val
-                                .strip_prefix('"')
-                                .and_then(|v| v.strip_suffix('"'))
-                                .or_else(|| val.strip_prefix("'").and_then(|v| v.strip_suffix("'")))
-                                .unwrap_or(val);
-                            let attr_val = el.attributes.get(attr);
-                            return match op {
-                                "*=" => attr_val.map(|v| v.contains(val_clean)).unwrap_or(false),
-                                "^=" => attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false),
-                                "$=" => attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false),
-                                "~=" => attr_val
-                                    .map(|v| v.split_whitespace().any(|w| w == val_clean))
-                                    .unwrap_or(false),
-                                _ => false,
-                            };
-                        }
-                    }
-                    let attr = inner.trim();
-                    return el.attributes.contains_key(attr);
-                }
-
-                return el.tag_name.to_lowercase() == sel_trim.to_lowercase();
-            }
-            false
-        }
 
         // Search starting from element's children (not the element itself)
         let mut found = None;
@@ -7019,10 +9433,20 @@ fn element_query_selector_cb(
             if id == element_id {
                 return;
             }
-            if found.is_none() && matches_selector(&state.document, id, sel_trim) {
-                found = Some(id);
+            if found.is_none() {
+                if let NodeData::Element(ref el) = state.document.nodes[id].data {
+                    if match_simple_selector(el, sel_trim) {
+                        found = Some(id);
+                    }
+                }
             }
         });
+        if debug {
+            eprintln!(
+                "[qs debug] element.querySelector({:?}) on node {} -> {:?}",
+                sel_trim, element_id, found
+            );
+        }
         found
     });
 
@@ -7066,61 +9490,7 @@ fn element_query_selector_all_cb(
                     return;
                 }
                 if let NodeData::Element(ref el) = state.document.nodes[id].data {
-                    let sel_trim = sel.trim();
-                    let matched = if sel_trim.starts_with('.') {
-                        let class_name = &sel_trim[1..];
-                        el.attributes
-                            .get("class")
-                            .map(|c| c.split_whitespace().any(|w| w == class_name))
-                            .unwrap_or(false)
-                    } else if sel_trim.starts_with('#') {
-                        let id_name = &sel_trim[1..];
-                        el.attributes
-                            .get("id")
-                            .map(|v| v == id_name)
-                            .unwrap_or(false)
-                    } else if sel_trim.starts_with('[') && sel_trim.ends_with(']') {
-                        let inner = &sel_trim[1..sel_trim.len() - 1];
-                        let ops = ["*=", "^=", "$=", "~="];
-                        let mut attr_match = false;
-                        for op in ops {
-                            if let Some(pos) = inner.find(op) {
-                                let attr = inner[..pos].trim();
-                                let val = inner[pos + op.len()..].trim();
-                                let val_clean = val
-                                    .strip_prefix('"')
-                                    .and_then(|v| v.strip_suffix('"'))
-                                    .or_else(|| {
-                                        val.strip_prefix("'").and_then(|v| v.strip_suffix("'"))
-                                    })
-                                    .unwrap_or(val);
-                                let attr_val = el.attributes.get(attr);
-                                attr_match = match op {
-                                    "*=" => {
-                                        attr_val.map(|v| v.contains(val_clean)).unwrap_or(false)
-                                    }
-                                    "^=" => {
-                                        attr_val.map(|v| v.starts_with(val_clean)).unwrap_or(false)
-                                    }
-                                    "$=" => {
-                                        attr_val.map(|v| v.ends_with(val_clean)).unwrap_or(false)
-                                    }
-                                    "~=" => attr_val
-                                        .map(|v| v.split_whitespace().any(|w| w == val_clean))
-                                        .unwrap_or(false),
-                                    _ => false,
-                                };
-                                break;
-                            }
-                        }
-                        if !attr_match && inner.trim() == inner {
-                            attr_match = el.attributes.contains_key(inner.trim());
-                        }
-                        attr_match
-                    } else {
-                        el.tag_name.to_lowercase() == sel_trim.to_lowercase()
-                    };
-                    if matched {
+                    if match_simple_selector(el, sel_trim) {
                         results.push(id);
                     }
                 }
@@ -7185,6 +9555,123 @@ fn element_get_elements_by_tag_name_cb(
 }
 
 // ── Element getElementsByClassName (scoped to element) ────────────────────
+
+fn element_attach_shadow_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let obj = args.this();
+    let host_id = extract_node_id(scope, obj.into()).unwrap_or(0);
+
+    // Create a dedicated shadow-root node stored in the host ElementData.
+    // It is not a child of the host in the flat DOM tree, so it is not
+    // emitted as a regular element; its children are composed with the
+    // host's light children during serialization and layout.
+    let shadow_id = with_dom(|state| {
+        if let Some(NodeData::Element(host_el)) = state.document.nodes.get(host_id).map(|n| &n.data)
+        {
+            if let Some(existing) = host_el.shadow_root {
+                return existing;
+            }
+        }
+        let id = state.document.nodes.len();
+        state.document.nodes.push(Node {
+            id,
+            parent: Some(host_id),
+            children: Vec::new(),
+            data: NodeData::Element(ElementData::new("#shadow-root")),
+        });
+        if let Some(NodeData::Element(host_el)) =
+            state.document.nodes.get_mut(host_id).map(|n| &mut n.data)
+        {
+            host_el.shadow_root = Some(id);
+        }
+        id
+    });
+
+    let shadow_obj = wrap_element(scope, shadow_id);
+    // Shadow roots report as document fragments and expose `.host`.
+    set_int(scope, shadow_obj, "nodeType", 11);
+    set_str(scope, shadow_obj, "nodeName", "#document-fragment");
+    set_int(scope, shadow_obj, "ELEMENT_NODE", 1);
+    set_int(scope, shadow_obj, "TEXT_NODE", 3);
+    set_int(scope, shadow_obj, "COMMENT_NODE", 8);
+    set_int(scope, shadow_obj, "DOCUMENT_NODE", 9);
+    set_int(scope, shadow_obj, "DOCUMENT_FRAGMENT_NODE", 11);
+    set_bool(scope, shadow_obj, "isConnected", true);
+    if let Some(doc) = document_obj(scope) {
+        let k = v8_str(scope, "ownerDocument");
+        let _ = shadow_obj.set(scope, k.into(), doc.into());
+    }
+    let host_key = v8_str(scope, "host");
+    let _ = shadow_obj.set(scope, host_key.into(), obj.into());
+
+    let sr_key = v8_str(scope, "shadowRoot");
+    let _ = obj.set(scope, sr_key.into(), shadow_obj.into());
+    rv.set(shadow_obj.into());
+}
+/// Element.getRootNode(options) — returns the root of the tree.
+fn element_get_root_node_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let this = args.this();
+    let mut nid = match extract_node_id(scope, this.into()) {
+        Some(n) => n,
+        None => {
+            rv.set(this.into());
+            return;
+        }
+    };
+
+    // Walk the parent chain. If we pass through a shadow root, return it so
+    // that web-component internals see their own tree. Otherwise return the
+    // document node, which SSR hydration code expects for top-level lookups.
+    let shadow_or_root = with_dom(|state| {
+        let mut current = nid;
+        while let Some(parent) = state.document.nodes[current].parent {
+            // If `parent` is the shadow root of some host, return the shadow root.
+            if let Some(NodeData::Element(host_el)) =
+                state.document.nodes.get(parent).map(|n| &n.data)
+            {
+                // parent itself is the shadow root node, find its host
+                if let Some(host_id) = state.document.nodes[parent].parent {
+                    if let Some(NodeData::Element(host_el2)) =
+                        state.document.nodes.get(host_id).map(|n| &n.data)
+                    {
+                        if host_el2.shadow_root == Some(parent) {
+                            return Some(parent);
+                        }
+                    }
+                }
+            }
+            current = parent;
+        }
+        None
+    });
+
+    if let Some(shadow_id) = shadow_or_root {
+        let shadow_obj = wrap_element(scope, shadow_id);
+        rv.set(shadow_obj.into());
+        return;
+    }
+
+    let root_id = with_dom(|state| {
+        let mut current = nid;
+        while let Some(parent) = state.document.nodes[current].parent {
+            current = parent;
+        }
+        current
+    });
+    if let Some(doc) = document_obj(scope) {
+        rv.set(doc.into());
+        return;
+    }
+    let root_obj = wrap_element(scope, root_id);
+    rv.set(root_obj.into());
+}
 
 fn element_get_elements_by_class_name_cb(
     scope: &mut v8::HandleScope,
@@ -7783,7 +10270,7 @@ fn insert_adjacent_html_cb(
 
     for &new_id in &all_ids {
         let obj = wrap_element(scope, new_id);
-        execute_appended_script_if_needed(scope, obj.into(), new_id);
+        enqueue_pending_dynamic_script(scope, obj.into());
     }
 }
 
@@ -7899,7 +10386,28 @@ fn collect_insertion_nodes(
             let _ = wrap_element(scope, text_id);
             ids.push(text_id);
         } else if let Ok(node) = v8::Local::<v8::Object>::try_from(arg) {
-            if let Some(child) = extract_node_id(scope, node.into()) {
+            if is_document_fragment(scope, node.into()) {
+                if let Some(template_id) = fragment_template_node_id(scope, node.into()) {
+                    let children = with_dom(|state| {
+                        let mut ids = Vec::new();
+                        if let Some(template_node) = state.document.nodes.get(template_id) {
+                            ids = template_node.children.clone();
+                            for &child in &ids {
+                                if let Some(parent) = state.document.nodes[child].parent {
+                                    state.document.nodes[parent]
+                                        .children
+                                        .retain(|&c| c != child);
+                                }
+                                state.document.nodes[child].parent = None;
+                            }
+                            ids
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                    ids.extend(children);
+                }
+            } else if let Some(child) = extract_node_id(scope, node.into()) {
                 with_dom(|state| {
                     if let Some(old_parent) = state.document.nodes[child].parent {
                         state.document.nodes[old_parent]
@@ -7945,7 +10453,7 @@ fn before_cb(
     });
     for &id in &new_ids {
         let obj = wrap_element(scope, id);
-        execute_appended_script_if_needed(scope, obj.into(), id);
+        enqueue_pending_dynamic_script(scope, obj.into());
     }
 }
 
@@ -7979,7 +10487,7 @@ fn after_cb(
     });
     for &id in &new_ids {
         let obj = wrap_element(scope, id);
-        execute_appended_script_if_needed(scope, obj.into(), id);
+        enqueue_pending_dynamic_script(scope, obj.into());
     }
 }
 
@@ -8019,7 +10527,7 @@ fn replace_with_cb(
     });
     for &id in &new_ids {
         let obj = wrap_element(scope, id);
-        execute_appended_script_if_needed(scope, obj.into(), id);
+        enqueue_pending_dynamic_script(scope, obj.into());
     }
 }
 
@@ -8047,7 +10555,7 @@ fn replace_children_cb(
     });
     for &id in &new_ids {
         let obj = wrap_element(scope, id);
-        execute_appended_script_if_needed(scope, obj.into(), id);
+        enqueue_pending_dynamic_script(scope, obj.into());
     }
 }
 
@@ -8668,6 +11176,127 @@ fn get_computed_style_cb(
     rv.set(style.into());
 }
 
+/// Legacy IE method `document.createEventObject()` used by some polyfills.
+fn document_create_event_object_cb(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    rv.set(v8::Object::new(scope).into());
+}
+
+/// `navigator.userAgentData.getHighEntropyValues()` returns a resolved promise
+/// with a UADataValues-shaped object so sites can destructure it safely.
+fn navigator_user_agent_data_high_entropy_cb(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let resolver = v8::PromiseResolver::new(scope).unwrap();
+    let obj = v8::Object::new(scope);
+    set_str(scope, obj, "platform", "Linux x86_64");
+    set_str(scope, obj, "platformVersion", "");
+    set_str(scope, obj, "architecture", "x86_64");
+    set_str(scope, obj, "model", "");
+    set_bool(scope, obj, "mobile", false);
+    let _ = resolver.resolve(scope, obj.into());
+    rv.set(resolver.get_promise(scope).into());
+}
+
+/// `navigator.cookieDeprecationLabel.getValue()` returns a resolved promise with
+/// an empty label, satisfying privacy-sandbox feature probes.
+fn navigator_cookie_deprecation_label_cb(
+    scope: &mut v8::HandleScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let empty = v8_str(scope, "");
+    let resolver = v8::PromiseResolver::new(scope).unwrap();
+    let _ = resolver.resolve(scope, empty.into());
+    rv.set(resolver.get_promise(scope).into());
+}
+
+/// `document.cookie` getter — returns all cookies visible to the current
+/// document as a `name=value; ...` string.
+fn document_cookie_getter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    _args: v8::PropertyCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let cookies = incognidium_net::get_cookies();
+    if cookies.is_empty() {
+        rv.set(v8_str(scope, "").into());
+        return;
+    }
+    let out = cookies
+        .iter()
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+    rv.set(v8_str(scope, &out).into());
+}
+
+/// `document.cookie` setter — parses `name=value[; ...]` and updates the shared
+/// jar. Domain/path attributes are honored when present.
+fn document_cookie_setter_cb(
+    scope: &mut v8::HandleScope,
+    _key: v8::Local<v8::Name>,
+    value: v8::Local<v8::Value>,
+    _args: v8::PropertyCallbackArguments,
+    _rv: v8::ReturnValue<()>,
+) {
+    let raw = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let Some((name, rest)) = raw.split_once('=') else {
+        return;
+    };
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let mut parts = rest.split(';');
+    let value = parts.next().unwrap_or("").trim().to_string();
+    let mut domain = None;
+    let mut path = None;
+    for part in parts {
+        let part = part.trim();
+        if part.eq_ignore_ascii_case("secure")
+            || part.eq_ignore_ascii_case("httponly")
+            || part.eq_ignore_ascii_case("samesite")
+            || part.starts_with("expires=")
+            || part.starts_with("max-age=")
+        {
+            continue;
+        }
+        if let Some(v) = part.strip_prefix("domain=") {
+            domain = Some(v.trim().to_string());
+        } else if let Some(v) = part.strip_prefix("path=") {
+            path = Some(v.trim().to_string());
+        }
+    }
+    let mut jar = incognidium_net::get_cookies();
+    if let Some(existing) = jar.iter_mut().find(|c| c.name == name) {
+        existing.value = value;
+        if domain.is_some() {
+            existing.domain = domain;
+        }
+        if path.is_some() {
+            existing.path = path;
+        }
+    } else {
+        jar.push(incognidium_net::StoredCookie {
+            name,
+            value,
+            domain,
+            path,
+        });
+    }
+    incognidium_net::set_cookies(jar);
+}
+
 // ── install globals ──────────────────────────────────────────────────────
 
 fn install_globals(
@@ -8678,6 +11307,10 @@ fn install_globals(
 ) {
     // document object (create first so element wrappers can reference it)
     let doc_obj = v8::Object::new(scope);
+    // The document is not a real node, but internal helpers check for
+    // __node_id__ on any object. Use a sentinel that extract_node_id will
+    // never return as a valid NodeId.
+    set_int(scope, doc_obj, "__node_id__", -1);
     set_document_obj(scope, doc_obj);
 
     // console
@@ -8727,7 +11360,7 @@ fn install_globals(
         scope,
         doc_obj,
         "addEventListener",
-        global_add_event_listener_cb,
+        document_add_event_listener_cb,
     );
     set_fn(
         scope,
@@ -8746,9 +11379,25 @@ fn install_globals(
     set_fn(scope, doc_obj, "importNode", import_node_cb);
     set_fn(scope, doc_obj, "adoptNode", adopt_node_cb);
     set_fn(scope, doc_obj, "createRange", create_range_cb);
+    set_fn(
+        scope,
+        doc_obj,
+        "createEventObject",
+        document_create_event_object_cb,
+    );
     set_fn(scope, doc_obj, "dispatchEvent", dispatch_event_cb);
     set_fn(scope, doc_obj, "write", document_write_cb);
     set_fn(scope, doc_obj, "writeln", document_writeln_cb);
+    // document.defaultView returns the window object.
+    let default_view_key = v8_str(scope, "defaultView");
+    let _ = doc_obj.set_accessor(
+        scope,
+        default_view_key.into(),
+        document_default_view_getter_cb,
+    );
+    // document.scripts — collection of <script> elements.
+    let scripts_key = v8_str(scope, "scripts");
+    let _ = doc_obj.set_accessor(scope, scripts_key.into(), document_scripts_getter_cb);
     // document.forms — HTMLCollection of forms in the document.
     let forms_key = v8_str(scope, "forms");
     let _ = doc_obj.set_accessor(scope, forms_key.into(), document_forms_getter_cb);
@@ -8774,18 +11423,70 @@ fn install_globals(
     set_fn(scope, doc_obj, "execCommand", noop_false);
     set_fn(scope, doc_obj, "contains", noop_true);
     set_fn(scope, doc_obj, "hasFocus", noop_true);
+    // document.defaultView returns the window object.
+    let default_view_key = v8_str(scope, "defaultView");
+    let _ = doc_obj.set_accessor(
+        scope,
+        default_view_key.into(),
+        document_default_view_getter_cb,
+    );
+    // document.scripts — collection of <script> elements.
+    let scripts_key = v8_str(scope, "scripts");
+    let _ = doc_obj.set_accessor(scope, scripts_key.into(), document_scripts_getter_cb);
     set_str(scope, doc_obj, "visibilityState", "visible");
     set_bool(scope, doc_obj, "hidden", false);
-    set_str(scope, doc_obj, "readyState", "loading");
+    // readyState is managed as a live string property so the engine can drive
+    // loading → interactive → complete transitions and fire readystatechange.
+    let ready_state_key = v8_str(scope, "readyState");
+    let _ = doc_obj.set_accessor(
+        scope,
+        ready_state_key.into(),
+        document_ready_state_getter_cb,
+    );
+    // Document-level event handling for readystatechange and other document
+    // lifecycle events. The generic element addEventListener relies on a
+    // __node_id__ that the document object does not have, so use a separate
+    // registry.
+    set_fn(
+        scope,
+        doc_obj,
+        "addEventListener",
+        document_add_event_listener_cb,
+    );
+    set_fn(
+        scope,
+        doc_obj,
+        "removeEventListener",
+        document_remove_event_listener_cb,
+    );
+    let onrs_key = v8_str(scope, "onreadystatechange");
+    let _ = doc_obj.set_accessor_with_setter(
+        scope,
+        onrs_key.into(),
+        document_onreadystatechange_getter_cb,
+        document_onreadystatechange_setter_cb,
+    );
+    // document.onDOMContentLoaded / onload are not standard but some scripts set
+    // them on document; keep them no-ops for now to avoid descriptor errors.
     set_str(scope, doc_obj, "title", "");
     set_str(scope, doc_obj, "domain", "");
     set_str(scope, doc_obj, "URL", "");
     set_str(scope, doc_obj, "documentURI", "");
-    set_str(scope, doc_obj, "cookie", "");
+    // document.cookie is backed by the engine's in-memory cookie jar so JS
+    // can read and write cookies that fetch/XHR will send automatically.
+    let cookie_key = v8_str(scope, "cookie");
+    let _ = doc_obj.set_accessor_with_setter(
+        scope,
+        cookie_key.into(),
+        document_cookie_getter_cb,
+        document_cookie_setter_cb,
+    );
     set_str(scope, doc_obj, "referrer", "");
     set_str(scope, doc_obj, "compatMode", "CSS1Compat");
     set_str(scope, doc_obj, "characterSet", "UTF-8");
     set_str(scope, doc_obj, "contentType", "text/html");
+    // Custom-elements polyfills probe this flag before patching createElement.
+    set_bool(scope, doc_obj, "__ce_create_patched", false);
     // documentElement / body / head
     if let Some(html_id) = with_dom(|s| s.document.document_element()) {
         let el = wrap_element(scope, html_id);
@@ -9421,6 +12122,11 @@ fn install_globals(
         "removeEventListener",
         global_remove_event_listener_cb,
     );
+    // Capture unhandled promise rejections so async bundle failures leave a stack trace.
+    let unhandled_js = v8_str(scope, "window.onunhandledrejection = function(e) { console.error('[unhandledrejection] ' + (e.reason || e) + ' stack: ' + (e.reason && e.reason.stack ? e.reason.stack : 'none')); };");
+    if let Some(s) = v8::Script::compile(scope, unhandled_js, None) {
+        let _ = s.run(scope);
+    }
     set_fn(scope, global, "dispatchEvent", noop);
     set_fn(scope, global, "scrollTo", window_scroll_to_cb);
     set_fn(scope, global, "scrollBy", window_scroll_by_cb);
@@ -9448,45 +12154,58 @@ fn install_globals(
     set_fn(scope, global, "setInterval", set_timeout_cb);
     set_fn(scope, global, "clearInterval", noop);
     set_fn(scope, global, "queueMicrotask", queue_microtask_cb);
+    set_fn(
+        scope,
+        global,
+        "requestIdleCallback",
+        request_idle_callback_cb,
+    );
+    set_fn(scope, global, "cancelIdleCallback", noop);
     set_fn(scope, global, "fetch", fetch_cb);
     set_fn(scope, global, "btoa", get_btoa_cb);
     set_fn(scope, global, "atob", get_atob_cb);
-
-    // customElements - minimal stub so custom-element registrations don't throw.
-    // We don't actually upgrade elements, but define() accepts the call.
-    fn custom_elements_define_cb(
-        scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
-        _rv: v8::ReturnValue,
-    ) {
-        // No-op: ignore custom element definitions.
-    }
-    fn custom_elements_get_cb(
-        scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
-        mut rv: v8::ReturnValue,
-    ) {
-        rv.set(v8::undefined(scope).into());
-    }
-    fn custom_elements_when_defined_cb(
-        scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
-        mut rv: v8::ReturnValue,
-    ) {
-        // Return a Promise that never resolves (undefined).
-        rv.set(v8::undefined(scope).into());
-    }
-    let custom_elements = v8::Object::new(scope);
-    set_fn(scope, custom_elements, "define", custom_elements_define_cb);
-    set_fn(scope, custom_elements, "get", custom_elements_get_cb);
     set_fn(
         scope,
-        custom_elements,
-        "whenDefined",
-        custom_elements_when_defined_cb,
+        global,
+        "__incognidium_resolve_url",
+        resolve_module_url_cb,
     );
-    let ce_key = v8_str(scope, "customElements");
-    global.set(scope, ce_key.into(), custom_elements.into());
+    set_fn(
+        scope,
+        global,
+        "__incognidium_fetch_module",
+        fetch_module_source_cb,
+    );
+    set_fn(
+        scope,
+        global,
+        "__incognidium_create_element",
+        create_element_for_js_cb,
+    );
+
+    // window.origin (readonly in browsers)
+    if let Some(url) = page_base_url().and_then(|u| incognidium_net::parse_url(&u).ok()) {
+        let origin = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+        set_str(scope, global, "origin", &origin);
+    }
+
+    // trustedTypes stub (required by Lit and some anti-bot scripts)
+    let trusted_types = v8::Object::new(scope);
+    set_fn(scope, trusted_types, "createPolicy", noop_str);
+    let empty_fn = v8::FunctionTemplate::new(scope, noop_obj);
+    let empty_fn_val = empty_fn.get_function(scope).unwrap();
+    for name in [
+        "TrustedHTML",
+        "TrustedScript",
+        "TrustedScriptURL",
+        "TrustedTypePolicy",
+        "TrustedTypePolicyFactory",
+    ] {
+        let k = v8_str(scope, name);
+        global.set(scope, k.into(), empty_fn_val.into());
+    }
+    let tt_key = v8_str(scope, "trustedTypes");
+    global.set(scope, tt_key.into(), trusted_types.into());
 
     // location object
     let location = v8::Object::new(scope);
@@ -9887,11 +12606,14 @@ fn install_globals(
         rv.set(obj.into());
     }
     fn empty_ctor(
-        scope: &mut v8::HandleScope,
-        _args: v8::FunctionCallbackArguments,
+        _scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        rv.set(v8::Object::new(scope).into());
+        // Return `this` so classes extending these constructors inherit the
+        // correct prototype chain. Returning a fresh object breaks subclass
+        // instances (they become plain Objects).
+        rv.set(args.this().into());
     }
     let dom_ctors = [
         "MutationObserver",
@@ -10096,14 +12818,253 @@ fn install_globals(
     set_fn(scope, url_obj, "canParse", url_can_parse_cb);
     global.set(scope, url_key.into(), url_f.into());
 
-    // Lock in our lenient URL implementation so bundled polyfills (e.g. core-js
-    // inside third-party scripts) cannot replace it with a strict one that
-    // throws "Invalid scheme" on about:blank, data:, etc.
-    let protect_url = v8_str(
+    // Save native URL/URLSearchParams so we can restore them if a later
+    // polyfill clobbers them with an incomplete implementation.
+    let save_url_js = v8_str(
         scope,
-        "try { Object.defineProperty(window, 'URL', { value: window.URL, writable: true, configurable: false, enumerable: true }); } catch(e) {}",
+        r#"
+        (function() {
+            try {
+                window.__incognidium_native_url = window.URL;
+                window.__incognidium_native_usp = window.URLSearchParams;
+            } catch(e) {}
+        })();
+        "#,
     );
-    if let Some(s) = v8::Script::compile(scope, protect_url, None) {
+    if let Some(s) = v8::Script::compile(scope, save_url_js, None) {
+        let _ = s.run(scope);
+    }
+    // Bootstrap an async-module-loader queue. Pages often ship bundles whose
+    // entry scripts call `SML.di(...)` / `SML.dm(...)` before the real loader
+    // (ShredditModuleLoader) has been instantiated — or when the loader's own
+    // module fails to load. In a real browser the loader is present by then; to
+    // match that ordering guarantee we install a queueing stub: calls made too
+    // early are recorded and replayed against the real loader the moment
+    // `window.SML` is (re)assigned. This prevents `undefined.di` crashes that
+    // abort bundle evaluation and leave custom elements undefined.
+    let sml_queue_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            if (window.__incognidium_sml_bootstrapped) return;
+            window.__incognidium_sml_bootstrapped = true;
+
+            var queued = [];
+            var realLoader = null;
+            var QUEUE_METHODS = ['di', 'dm', 'load', 'loadModule'];
+
+            function makeStub() {
+                var stub = {
+                    moduleRegistry: Object.create(null),
+                    __incognidium_sml_stub: true
+                };
+                QUEUE_METHODS.forEach(function(name) {
+                    stub[name] = function() {
+                        var args = Array.prototype.slice.call(arguments);
+                        if (realLoader && typeof realLoader[name] === 'function') {
+                            return realLoader[name].apply(realLoader, args);
+                        }
+                        queued.push([name, args, this]);
+                        return Promise.resolve();
+                    };
+                });
+                // Methods callers may poke at but we don't queue.
+                stub._evaluateModule = function() {};
+                stub.resolveModule = function() {};
+                stub.rejectModule = function() {};
+                return stub;
+            }
+
+            function drain(loader) {
+                realLoader = loader;
+                var pending = queued;
+                queued = [];
+                for (var i = 0; i < pending.length; i++) {
+                    var entry = pending[i];
+                    try {
+                        var fn = loader[entry[0]];
+                        if (typeof fn === 'function') fn.apply(loader, entry[1]);
+                    } catch (e) {}
+                }
+            }
+
+            var stubValue = makeStub();
+            try {
+                Object.defineProperty(window, 'SML', {
+                    configurable: true,
+                    get: function() { return realLoader || stubValue; },
+                    set: function(v) {
+                        // Real loader assigned: keep it and replay queued calls.
+                        realLoader = (v && v.__incognidium_sml_stub) ? realLoader : v;
+                        if (v && v.__incognidium_sml_stub) {
+                            realLoader = null;
+                            return;
+                        }
+                        drain(realLoader);
+                    }
+                });
+            } catch (e) {}
+            // Some code reads window.ShredditModuleLoader directly.
+            if (!('SML' in window)) { window.SML = stubValue; }
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, sml_queue_js, None) {
+        let _ = s.run(scope);
+    }
+    // Instrument the async module loader (window.SML / window.AsyncModuleLoader)
+    // when it appears so we can trace why bundle module promises stay pending.
+    // We wrap the prototype methods before the loader is instantiated.
+    let sml_instrument_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            var debugSML = function() { return typeof window.__incognidium_debug_module !== 'undefined'; };
+            function wrap(proto, name) {
+                if (!proto || typeof proto[name] !== 'function' || proto[name].__incognidium_wrapped) return;
+                proto[name].__incognidium_wrapped = true;
+                var orig = proto[name];
+                proto[name] = function() {
+                    if (typeof window.__incognidium_repair_url === 'function') window.__incognidium_repair_url();
+                    var args = Array.prototype.slice.call(arguments);
+                    if (debugSML() && (name === 'resolveModule' || name === 'rejectModule' || name === '_evaluateModule')) {
+                        console.warn('[sml ' + name + '] ' + args[0]);
+                    }
+                    var result = orig.apply(this, arguments);
+                    if (debugSML() && name === 'di' && args[2]) {
+                        console.warn('[sml di] ' + args[2] + ' concatMode=' + this._diState.concatMode + ' prefix=' + (this._diState.lastPrefix || 'n/a'));
+                    }
+                    return result;
+                };
+            }
+            function install() {
+                var Loader = window.SML || window.AsyncModuleLoader;
+                if (!Loader || !Loader.prototype) return;
+                var proto = Loader.prototype;
+                wrap(proto, 'resolveModule');
+                wrap(proto, 'rejectModule');
+                wrap(proto, '_evaluateModule');
+                wrap(proto, 'di');
+                wrap(proto, '_load');
+            }
+            // Try now (if an earlier script already defined it) and watch for the
+            // constructor to appear later.
+            install();
+            ['SML', 'AsyncModuleLoader'].forEach(function(name) {
+                try {
+                    Object.defineProperty(window, name, {
+                        configurable: true,
+                        set: function(v) {
+                            Object.defineProperty(window, name, { value: v, configurable: true, writable: true });
+                            install();
+                        }
+                    });
+                } catch(e) {}
+            });
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, sml_instrument_js, None) {
+        let _ = s.run(scope);
+    }
+
+    // Generic URL health guard: many module loaders and async bundle loaders
+    // call `new URL(...).searchParams.get(...)`. If a polyfill clobbers `URL`
+    // with an implementation missing `searchParams`, those loaders crash. We
+    // install a repair helper and use it inside the SML/async-loader patches.
+    let url_repair_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            window.__incognidium_url_works = function() {
+                try {
+                    var u = new window.URL('https://cdn.example.com/js/concat?prefix=en-US/');
+                    return !!(u && u.searchParams && typeof u.searchParams.get === 'function' && u.searchParams.get('prefix') === 'en-US/');
+                } catch(e) { return false; }
+            };
+            window.__incognidium_repair_url = function() {
+                var nativeURL = window.__incognidium_native_url;
+                var nativeUSP = window.__incognidium_native_usp;
+                if (!window.__incognidium_url_works() && nativeURL) {
+                    try {
+                        Object.defineProperty(window, 'URL', { value: nativeURL, writable: true, configurable: true, enumerable: true });
+                    } catch(e) {}
+                }
+                if (nativeUSP && (!window.URLSearchParams || typeof window.URLSearchParams !== 'function')) {
+                    try {
+                        Object.defineProperty(window, 'URLSearchParams', { value: nativeUSP, writable: true, configurable: true, enumerable: true });
+                    } catch(e) {}
+                }
+            };
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, url_repair_js, None) {
+        let _ = s.run(scope);
+    }
+
+    // Blob-backed object URLs. es-module-shims creates blobs for rewritten
+    // modules and imports them via URL.createObjectURL. We keep an in-memory
+    // registry and return `blob:incognidium/<uuid>` URLs that our fetch path
+    // recognises below.
+    fn url_create_object_url_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let blob = args.get(0);
+        let mut bytes = Vec::new();
+        if let Some(obj) = blob.to_object(scope) {
+            // Read the internal `_data` property set by our Blob stub.
+            let data_key = v8_str(scope, "_data");
+            if let Some(v) = obj.get(scope, data_key.into()) {
+                bytes = v.to_rust_string_lossy(scope).into_bytes();
+            } else {
+                let parts_key = v8_str(scope, "_parts");
+                if let Some(parts) = obj.get(scope, parts_key.into()) {
+                    if let Some(arr) = parts.to_object(scope) {
+                        let len_key = v8_str(scope, "length");
+                        if let Some(len_v) = arr.get(scope, len_key.into()) {
+                            if let Some(len) = len_v.to_number(scope).map(|n| n.value() as u32) {
+                                for i in 0..len {
+                                    let idx = v8::Integer::new(scope, i as i32).into();
+                                    if let Some(part) = arr.get(scope, idx) {
+                                        bytes.extend_from_slice(
+                                            &part.to_rust_string_lossy(scope).into_bytes(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let url = format!("blob:incognidium/{}", id);
+        register_blob_url(&url, bytes, "application/javascript");
+        rv.set(v8_str(scope, &url).into());
+    }
+    fn url_revoke_object_url_cb(
+        _scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        _rv: v8::ReturnValue,
+    ) {
+        // No-op: keeping revoked URLs around is harmless for rendering.
+    }
+    set_fn(scope, url_obj, "createObjectURL", url_create_object_url_cb);
+    set_fn(scope, url_obj, "revokeObjectURL", url_revoke_object_url_cb);
+    global.set(scope, url_key.into(), url_f.into());
+
+    // Keep our lenient URL implementation available for repair, but leave it
+    // configurable so polyfills that genuinely need to extend it can do so.
+    // Runtime code paths that depend on URL (module loader, async loaders)
+    // restore the native implementation on demand if it was clobbered.
+    let save_url_for_repair = v8_str(
+        scope,
+        "try { window.__incognidium_native_url = window.__incognidium_native_url || window.URL; window.__incognidium_native_usp = window.__incognidium_native_usp || window.URLSearchParams; } catch(e) {}",
+    );
+    if let Some(s) = v8::Script::compile(scope, save_url_for_repair, None) {
         let _ = s.run(scope);
     }
 
@@ -10131,36 +13092,26 @@ fn install_globals(
     // Empty constructors / type tags — code does `typeof Element !== "undefined"`
     // or `node instanceof Node`, so just having a function is usually enough.
     let empty_ctors = [
-        "Node",
-        "Element",
-        "HTMLElement",
-        "HTMLDivElement",
-        "HTMLSpanElement",
-        "HTMLInputElement",
-        "HTMLButtonElement",
-        "HTMLAnchorElement",
-        "HTMLImageElement",
-        "HTMLCanvasElement",
-        "HTMLVideoElement",
-        "HTMLAudioElement",
-        "HTMLIFrameElement",
-        "HTMLFormElement",
-        "HTMLSelectElement",
-        "HTMLTextAreaElement",
-        "HTMLTableElement",
-        "HTMLScriptElement",
-        "HTMLStyleElement",
-        "HTMLLinkElement",
-        "HTMLMetaElement",
-        "HTMLBodyElement",
-        "HTMLHtmlElement",
-        "HTMLHeadElement",
-        "HTMLOptionElement",
-        "Text",
-        "Comment",
-        "DocumentFragment",
-        "Document",
-        "DocumentType",
+        "Event",
+        "CustomEvent",
+        "MouseEvent",
+        "KeyboardEvent",
+        "TouchEvent",
+        "PointerEvent",
+        "WheelEvent",
+        "DragEvent",
+        "FocusEvent",
+        "InputEvent",
+        "UIEvent",
+        "MessageEvent",
+        "StorageEvent",
+        "EventTarget",
+        "ResizeObserver",
+        "IntersectionObserver",
+        "MutationObserver",
+        "DOMException",
+        "DOMRect",
+        "DOMTokenList",
         "Event",
         "CustomEvent",
         "MouseEvent",
@@ -10409,9 +13360,29 @@ fn install_globals(
         abort_controller_fn.into(),
     );
 
+    // Register real ReadableStream / WritableStream / Response constructors
+    // before the generic empty-ctor fallback loop.
+    let rs_key = v8_str(scope, "ReadableStream");
+    let rs_tmpl = v8::FunctionTemplate::new(scope, readable_stream_ctor);
+    let rs_fn = rs_tmpl.get_function(scope).unwrap();
+    global.set(scope, rs_key.into(), rs_fn.into());
+
+    let ws_key = v8_str(scope, "WritableStream");
+    let ws_tmpl = v8::FunctionTemplate::new(scope, writable_stream_ctor);
+    let ws_fn = ws_tmpl.get_function(scope).unwrap();
+    global.set(scope, ws_key.into(), ws_fn.into());
+
+    let resp_key = v8_str(scope, "Response");
+    let resp_tmpl = v8::FunctionTemplate::new(scope, response_ctor);
+    let resp_fn = resp_tmpl.get_function(scope).unwrap();
+    global.set(scope, resp_key.into(), resp_fn.into());
+
     for &n in empty_ctors.iter() {
-        // Skip Event and CustomEvent since we already defined them above
-        if n == "Event" || n == "CustomEvent" {
+        // Skip constructors already defined above.
+        if matches!(
+            n,
+            "Event" | "CustomEvent" | "Response" | "ReadableStream" | "WritableStream"
+        ) {
             continue;
         }
         let key = v8_str(scope, n);
@@ -10420,6 +13391,720 @@ fn install_globals(
         global.set(scope, key.into(), f.into());
     }
 
+    // Ensure DOM constructor prototypes exist and chain correctly so Web
+    // Components polyfills can read CharacterData.prototype etc. without throwing.
+    let dom_prototype_stub = v8_str(
+        scope,
+        r#"
+        (function() {
+            function ensureProto(ctor, parentProto) {
+                if (typeof ctor !== 'function') return;
+                if (!ctor.prototype) ctor.prototype = Object.create(parentProto || {});
+                else if (parentProto && Object.setPrototypeOf) Object.setPrototypeOf(ctor.prototype, parentProto);
+                else if (parentProto) ctor.prototype.__proto__ = parentProto;
+                ctor.prototype.constructor = ctor;
+            }
+            function makeNodeCtor(defaultTag, name) {
+                var f = function() {
+                    if (new.target) {
+                        var tag = (new.target.prototype && new.target.prototype.__incognidium_tagName) || defaultTag;
+                        var el = __incognidium_create_element(tag);
+                        // For custom elements, the instance prototype must be the
+                        // derived class's prototype (e.g. Foo.prototype), not the
+                        // generic wrapper prototype. Set it here so the instance
+                        // inherits class methods while still reaching our Rust-backed
+                        // DOM methods through HTMLElement.prototype.
+                        if (new.target.prototype && Object.getPrototypeOf(el) !== new.target.prototype) {
+                            Object.setPrototypeOf(el, new.target.prototype);
+                        }
+                        return el;
+                    }
+                };
+                Object.defineProperty(f, 'name', { value: name, configurable: true });
+                return f;
+            }
+            if (!window.Node) window.Node = makeNodeCtor('div', 'Node');
+            if (!window.Element) window.Element = makeNodeCtor('div', 'Element');
+            if (!window.CharacterData) window.CharacterData = makeNodeCtor('#text', 'CharacterData');
+            if (!window.Text) window.Text = makeNodeCtor('#text', 'Text');
+            if (!window.Comment) window.Comment = makeNodeCtor('#comment', 'Comment');
+            if (!window.CDATASection) window.CDATASection = makeNodeCtor('#cdata-section', 'CDATASection');
+            if (!window.ProcessingInstruction) window.ProcessingInstruction = makeNodeCtor('processing-instruction', 'ProcessingInstruction');
+            if (!window.DocumentType) window.DocumentType = makeNodeCtor('doctype', 'DocumentType');
+            if (!window.EntityReference) window.EntityReference = makeNodeCtor('entityreference', 'EntityReference');
+            if (!window.Entity) window.Entity = makeNodeCtor('entity', 'Entity');
+            if (!window.Notation) window.Notation = makeNodeCtor('notation', 'Notation');
+            if (!window.Document) window.Document = makeNodeCtor('#document', 'Document');
+            if (!window.DocumentFragment) window.DocumentFragment = makeNodeCtor('#document-fragment', 'DocumentFragment');
+            if (!window.ShadowRoot) window.ShadowRoot = makeNodeCtor('#shadow-root', 'ShadowRoot');
+            if (!window.HTMLElement) window.HTMLElement = makeNodeCtor('div', 'HTMLElement');
+            if (!window.SVGElement) window.SVGElement = makeNodeCtor('svg', 'SVGElement');
+            if (!window.CustomElementRegistry) window.CustomElementRegistry = function CustomElementRegistry() {};
+            [
+                'HTMLElement','SVGElement','HTMLDivElement','HTMLSpanElement','HTMLInputElement','HTMLButtonElement',
+                'HTMLAnchorElement','HTMLImageElement','HTMLCanvasElement','HTMLVideoElement',
+                'HTMLAudioElement','HTMLIFrameElement','HTMLFormElement','HTMLSelectElement',
+                'HTMLTextAreaElement','HTMLTableElement','HTMLScriptElement','HTMLStyleElement',
+                'HTMLLinkElement','HTMLMetaElement','HTMLBodyElement','HTMLHtmlElement',
+                'HTMLHeadElement','HTMLOptionElement'
+            ].forEach(function(name) {
+                if (!window[name]) window[name] = function() {};
+            });
+            var np = (ensureProto(window.Node, null), window.Node.prototype);
+            ensureProto(window.Element, np);
+            ensureProto(window.CharacterData, np);
+            var cp = window.CharacterData.prototype;
+            ensureProto(window.Text, cp);
+            ensureProto(window.Comment, cp);
+            ensureProto(window.Document, np);
+            ensureProto(window.DocumentFragment, np);
+            ensureProto(window.ShadowRoot, window.DocumentFragment.prototype);
+            [
+                'HTMLElement','SVGElement','HTMLDivElement','HTMLSpanElement','HTMLInputElement','HTMLButtonElement',
+                'HTMLAnchorElement','HTMLImageElement','HTMLCanvasElement','HTMLVideoElement',
+                'HTMLAudioElement','HTMLIFrameElement','HTMLFormElement','HTMLSelectElement',
+                'HTMLTextAreaElement','HTMLTableElement','HTMLScriptElement','HTMLStyleElement',
+                'HTMLLinkElement','HTMLMetaElement','HTMLBodyElement','HTMLHtmlElement',
+                'HTMLHeadElement','HTMLOptionElement'
+            ].forEach(function(name) {
+                ensureProto(window[name], window.Element.prototype);
+            });
+            // Bind the standard DOM constructor prototypes to the Rust-backed
+            // wrapper prototype returned by document.createElement('div'). This
+            // is the only way custom-element classes that extend HTMLElement can
+            // inherit both their class methods and our Rust-backed DOM methods
+            // (parentNode, appendChild, addEventListener, etc.).
+            try {
+                var wrapperProto = Object.getPrototypeOf(document.createElement('div'));
+                function ensureChildNodes(proto) {
+                    if (!proto || 'childNodes' in proto) return;
+                    // Define as accessor properties with function getters so that
+                    // third-party descriptor-copying helpers do not treat the
+                    // array value as a getter and pass it to Object.defineProperty.
+                    Object.defineProperty(proto, 'childNodes', {
+                        get: function() { return []; },
+                        set: function(_v) {},
+                        configurable: true,
+                        enumerable: true
+                    });
+                    Object.defineProperty(proto, 'children', {
+                        get: function() { return []; },
+                        set: function(_v) {},
+                        configurable: true,
+                        enumerable: true
+                    });
+                }
+                ensureChildNodes(wrapperProto);
+                // Keep Node/Element/Document chains intact by making the wrapper
+                // prototype inherit from Element.prototype, and Element.prototype
+                // inherit from Node.prototype.
+                if (window.Element && window.Element.prototype && window.Element.prototype !== wrapperProto) {
+                    if (Object.setPrototypeOf) Object.setPrototypeOf(wrapperProto, window.Element.prototype);
+                    else wrapperProto.__proto__ = window.Element.prototype;
+                }
+                function bindCtorProto(ctor) {
+                    if (typeof ctor !== 'function') return;
+                    ctor.prototype = wrapperProto;
+                    ctor.prototype.constructor = ctor;
+                }
+                bindCtorProto(window.Element);
+                bindCtorProto(window.HTMLElement);
+                bindCtorProto(window.SVGElement);
+                bindCtorProto(window.HTMLDivElement);
+                bindCtorProto(window.HTMLSpanElement);
+                bindCtorProto(window.HTMLInputElement);
+                bindCtorProto(window.HTMLButtonElement);
+                bindCtorProto(window.HTMLAnchorElement);
+                bindCtorProto(window.HTMLImageElement);
+                bindCtorProto(window.HTMLCanvasElement);
+                bindCtorProto(window.HTMLVideoElement);
+                bindCtorProto(window.HTMLAudioElement);
+                bindCtorProto(window.HTMLIFrameElement);
+                bindCtorProto(window.HTMLFormElement);
+                bindCtorProto(window.HTMLSelectElement);
+                bindCtorProto(window.HTMLTextAreaElement);
+                bindCtorProto(window.HTMLTableElement);
+                bindCtorProto(window.HTMLScriptElement);
+                bindCtorProto(window.HTMLStyleElement);
+                bindCtorProto(window.HTMLLinkElement);
+                bindCtorProto(window.HTMLMetaElement);
+                bindCtorProto(window.HTMLBodyElement);
+                bindCtorProto(window.HTMLHtmlElement);
+                bindCtorProto(window.HTMLHeadElement);
+                bindCtorProto(window.HTMLOptionElement);
+                bindCtorProto(window.HTMLSlotElement);
+            } catch(e) {
+                console.warn('[dom stub] prototype binding failed: ' + e);
+            }
+            if (window.HTMLScriptElement && window.HTMLScriptElement.prototype) {
+                window.HTMLScriptElement.prototype.noModule = false;
+            }
+        })();
+        "#,
+    );
+    // Minimal DOM traversal / implementation stubs for Web Components polyfills.
+    if let Some(s) = v8::Script::compile(scope, dom_prototype_stub, None) {
+        let _ = s.run(scope);
+    }
+    let traversal_stub = v8_str(
+        scope,
+        r#"
+    (function() {
+        if (!window.NodeFilter) {
+            window.NodeFilter = {
+                SHOW_ELEMENT: 1,
+                SHOW_ATTRIBUTE: 2,
+                SHOW_TEXT: 4,
+                SHOW_CDATA_SECTION: 8,
+                SHOW_ENTITY_REFERENCE: 16,
+                SHOW_ENTITY: 32,
+                SHOW_PROCESSING_INSTRUCTION: 64,
+                SHOW_COMMENT: 128,
+                SHOW_DOCUMENT: 256,
+                SHOW_DOCUMENT_TYPE: 512,
+                SHOW_DOCUMENT_FRAGMENT: 1024,
+                SHOW_NOTATION: 2048,
+                SHOW_ALL: 4294967295
+            };
+        }
+        if (!window.__shady_native_addEventListener) {
+            window.__shady_native_addEventListener = window.addEventListener;
+        }
+        if (!window.__shady_native_removeEventListener) {
+            window.__shady_native_removeEventListener = window.removeEventListener;
+        }
+        if (document) {
+            if (!document.createTreeWalker) {
+                document.createTreeWalker = function(root, whatToShow, filter) {
+                    var stack = [root];
+                    return {
+                        currentNode: root,
+                        nextNode: function() {
+                            while (stack.length) {
+                                var n = stack.pop();
+                                this.currentNode = n;
+                                if (n && n.childNodes) {
+                                    for (var i = n.childNodes.length - 1; i >= 0; i--) {
+                                        stack.push(n.childNodes[i]);
+                                    }
+                                }
+                                if (!whatToShow || whatToShow === window.NodeFilter.SHOW_ALL) return n;
+                                if (whatToShow === window.NodeFilter.SHOW_ELEMENT && n.nodeType === 1) return n;
+                                if (whatToShow === window.NodeFilter.SHOW_TEXT && n.nodeType === 3) return n;
+                            }
+                            return null;
+                        }
+                    };
+                };
+            }
+            if (!document.implementation) {
+                document.implementation = {};
+            }
+                        if (!document.implementation.createHTMLDocument) {
+                document.implementation.createHTMLDocument = function(title) {
+                    var doc = { title: title || "" };
+                    doc.createElement = function(tag) { return document.createElement(tag); };
+                    return doc;
+                };
+            }
+
+        }
+    })();
+    "#,
+    );
+
+    if let Some(s) = v8::Script::compile(scope, traversal_stub, None) {
+        let _ = s.run(scope);
+    }
+
+    // Functional customElements registry that upgrades elements and invokes
+    // their connectedCallback. Many client-side apps (Lit, Stencil, etc.) rely
+    // on this to render content when the static engine cannot run their full
+    // framework bundle.
+    let ce_stub = v8_str(
+        scope,
+        r#"
+    (function() {
+        var registry = {};
+        var whenDefinedResolvers = {};
+        function resolveWhenDefined(name, ctor) {
+            var list = whenDefinedResolvers[name];
+            if (!list) return;
+            while (list.length) {
+                var fn = list.shift();
+                try { fn(ctor); } catch(e) {}
+            }
+        }
+        function copyAttributes(src, dst) {
+            if (!src || !src.attributes || !dst || !dst.setAttribute) return;
+            for (var i = 0; i < src.attributes.length; i++) {
+                var a = src.attributes[i];
+                try { dst.setAttribute(a.name, a.value); } catch(_) {}
+            }
+        }
+        function moveChildren(src, dst) {
+            if (!src || !dst || !dst.appendChild) return;
+            while (src.firstChild) {
+                try { dst.appendChild(src.firstChild); } catch(_) { break; }
+            }
+        }
+        function runConnected(el) {
+            try {
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('runConnected', el.tagName, typeof el.connectedCallback);
+                }
+                if (typeof el.connectedCallback === 'function') {
+                    if (typeof window.__incognidium_debug_ce === 'function') {
+                        window.__incognidium_debug_ce('runConnected-calling', el.tagName, el.id || '');
+                    }
+                    el.connectedCallback();
+                }
+            } catch(e) {
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('runConnected-error', el.tagName, String(e));
+                }
+            }
+        }
+        function upgradeToReal(el, ctor, name) {
+            if (!el || el.__upgraded || !ctor) return el;
+            try {
+                if (!ctor.prototype.__incognidium_tagName) {
+                    ctor.prototype.__incognidium_tagName = name;
+                }
+                // Construct a real instance so the constructor can set up
+                // internal state such as shadow DOM. Then swap it into the tree
+                // in place of the pre-existing placeholder, preserving
+                // attributes and children.
+                var replacement = new ctor();
+                copyAttributes(el, replacement);
+                moveChildren(el, replacement);
+                // During a real upgrade, the browser calls attributeChangedCallback
+                // for every attribute in observedAttributes. Our setAttribute
+                // path should already do this, but some frameworks finalize
+                // observed attributes lazily, so trigger them explicitly here
+                // to be safe.
+                if (typeof replacement.attributeChangedCallback === 'function') {
+                    var observed = ctor.observedAttributes || [];
+                    for (var ai = 0; ai < observed.length; ai++) {
+                        var attrName = observed[ai];
+                        var attrVal = replacement.getAttribute(attrName);
+                        if (attrVal !== null && attrVal !== '') {
+                            try {
+                                replacement.attributeChangedCallback(attrName, null, attrVal);
+                            } catch(_) {}
+                        }
+                    }
+                }
+                var parent = el.parentNode;
+                if (parent) {
+                    try {
+                        if (parent.replaceChild) {
+                            parent.replaceChild(replacement, el);
+                        } else {
+                            parent.insertBefore(replacement, el);
+                            parent.removeChild(el);
+                        }
+                    } catch(_) {}
+                }
+                replacement.__upgraded = true;
+                runConnected(replacement);
+                return replacement;
+            } catch(e) {
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('upgrade-failed', name, String(e));
+                }
+                return el;
+            }
+        }
+        function upgradeAll(name, ctor) {
+            try {
+                var nodes = document.querySelectorAll(name);
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('upgradeAll', name, nodes.length);
+                }
+                for (var i = 0; i < nodes.length; i++) {
+                    upgradeToReal(nodes[i], ctor, name);
+                }
+            } catch(e) {
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('upgradeAll-error', name, String(e));
+                }
+            }
+        }
+        var pendingUpgrades = [];
+        function flushCustomElementUpgrades() {
+            while (pendingUpgrades.length) {
+                var def = pendingUpgrades.shift();
+                upgradeAll(def.name, def.ctor);
+            }
+        }
+        window.__incognidium_flush_custom_elements = flushCustomElementUpgrades;
+        window.customElements = {
+            define: function(name, ctor, options) {
+                if (registry[name] || !ctor) return;
+                registry[name] = ctor;
+                if (typeof window.__incognidium_debug_ce === 'function') {
+                    window.__incognidium_debug_ce('define', name,
+                        'addLoaders=' + (typeof ctor.addLoaders) +
+                        ' LoadersMap=' + (ctor.Loaders instanceof Map) +
+                        ' LoadersSize=' + (ctor.Loaders && ctor.Loaders.size));
+                }
+                // Queue upgrades so the rest of the current script/module (and
+                // any synchronously appended dynamic scripts) can finish
+                // setting up state before connectedCallback runs.
+                pendingUpgrades.push({ name: name, ctor: ctor });
+                var origCreate = document.createElement;
+                if (origCreate && !document.__ce_create_patched) {
+                    document.__ce_create_patched = true;
+                    document.createElement = function(tag) {
+                        var Ctor = registry[tag.toLowerCase()];
+                        if (Ctor) {
+                            if (!Ctor.prototype.__incognidium_tagName) {
+                                Ctor.prototype.__incognidium_tagName = tag;
+                            }
+                            var el = new Ctor();
+                            if (typeof window.customElements.__chain === 'function') {
+                                window.customElements.__chain(el, Ctor);
+                            }
+                            el.__upgraded = true;
+                            runConnected(el);
+                            return el;
+                        }
+                        return origCreate.call(document, tag);
+                    };
+                }
+                if (window.Node && window.Node.prototype && !window.Node.prototype.__ce_append_patched) {
+                    window.Node.prototype.__ce_append_patched = true;
+                    var origAppend = window.Node.prototype.appendChild;
+                    window.Node.prototype.appendChild = function(child) {
+                        var result = origAppend.call(this, child);
+                        if (child && child.tagName) {
+                            var Ctor = registry[child.tagName.toLowerCase()];
+                            if (Ctor) upgradeToReal(child, Ctor, child.tagName.toLowerCase());
+                        }
+                        return result;
+                    };
+                }
+                resolveWhenDefined(name, ctor);
+
+                // Generic retry helper for async-loader-style custom elements:
+                // classes that expose a static `addLoaders` factory registrar.
+                // The first connectedCallback often runs before the requested
+                // bundle is registered, so we record failures and re-try them
+                // each time new loaders are added. We do not require a `Loaders`
+                // Map on the class itself because minifiers sometimes store the
+                // registry on a separate variable; we use the map passed to
+                // addLoaders for retry decisions.
+                function loaderBundleName(el) {
+                    if (!el) return '';
+                    return el.bundleName
+                        || (el.getAttribute && el.getAttribute('bundle'))
+                        || (el.getAttribute && el.getAttribute('bundle-name'))
+                        || (el.getAttribute && el.getAttribute('bundlename'))
+                        || (el.getAttribute && el.getAttribute('bundleName'))
+                        || '';
+                }
+                function mapHasLoader(map, name) {
+                    if (!map || !name) return false;
+                    if (map instanceof Map) return map.has(name) || (typeof map.get === 'function' && !!map.get(name));
+                    return Object.prototype.hasOwnProperty.call(map, name) || !!map[name];
+                }
+                // Robust async-loader helper. Capture the original constructor
+                // before `customElements.define` has a chance to swap it for
+                // a decorated/proxy version, then ensure addLoaders/Loaders
+                // survive on the registered class regardless of what the
+                // framework decorator returns.
+                var originalCtor = ctor;
+                function patchAsyncLoader(target) {
+                    if (!target.__incognidium_loader_errored) {
+                        target.__incognidium_loader_errored = new Set();
+                    }
+                    var errored = target.__incognidium_loader_errored;
+                    var debug = typeof window.__incognidium_debug_ce === 'function';
+                    if (!target.prototype.__incognidium_load_patched) {
+                        target.prototype.__incognidium_load_patched = true;
+                        var origLoad = target.prototype.load;
+                        if (typeof origLoad === 'function') {
+                            target.prototype.load = function() {
+                                var self = this;
+                                var bn = loaderBundleName(self);
+                                if (typeof window.__incognidium_repair_url === 'function') window.__incognidium_repair_url();
+                                if (debug) {
+                                    window.__incognidium_debug_ce('async-load', bn || 'no-bundle', 'loaders=' + (target.Loaders && target.Loaders instanceof Map ? target.Loaders.size : 'none'));
+                                }
+                                return Promise.resolve().then(function() {
+                                    return origLoad.call(self);
+                                }).catch(function(e) {
+                                    if (debug) {
+                                        window.__incognidium_debug_ce('async-load-error', bn || 'no-bundle', String(e && e.message));
+                                    }
+                                    errored.add(self);
+                                    throw e;
+                                });
+                            };
+                        }
+                    }
+                    function wrapAddLoaders() {
+                        var orig = target.addLoaders;
+                        if (typeof orig !== 'function' || orig.__incognidium_wrapped) return;
+                        orig.__incognidium_wrapped = true;
+                        if (debug) console.warn('[async-loader patch] wrapping addLoaders on ' + name);
+                        target.addLoaders = function(map) {
+                            if (debug) console.warn('[async-loader patch] addLoaders called for ' + name + ' keys=' + (map && Object.keys ? Object.keys(map).length : 'none'));
+                            if (debug) {
+                                var names = map && typeof Object.keys === 'function' ? Object.keys(map) : [];
+                                window.__incognidium_debug_ce('async-addLoaders', names.length ? names.slice(0,5).join(',') : 'none', 'errored=' + errored.size);
+                            }
+                            var result = orig.call(target, map);
+                            var retry = [];
+                            // Retry elements that previously errored...
+                            errored.forEach(function(el) {
+                                var bn = loaderBundleName(el);
+                                if (el && typeof el.load === 'function' && mapHasLoader(map, bn)) {
+                                    retry.push(el);
+                                }
+                            });
+                            // ...and elements that ran before any loader was
+                            // registered (they silently return early when the
+                            // Loaders map is empty).
+                            if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+                                var allLoaders = document.querySelectorAll(name);
+                                for (var i = 0; i < allLoaders.length; i++) {
+                                    var el = allLoaders[i];
+                                    var bn = loaderBundleName(el);
+                                    if (el && typeof el.load === 'function' && mapHasLoader(map, bn) && !el.__incognidium_loaded_flag) {
+                                        if (retry.indexOf(el) === -1) retry.push(el);
+                                    }
+                                }
+                            }
+                            if (debug && retry.length) {
+                                window.__incognidium_debug_ce('async-retry', retry.length, retry.map(function(e){return loaderBundleName(e);}).join(','));
+                            }
+                            retry.forEach(function(el) {
+                                errored.delete(el);
+                                el.__incognidium_loaded_flag = true;
+                                // Some loader implementations set an internal
+                                // "already loaded" guard before throwing when a
+                                // bundle is missing. Clear the common guard names
+                                // so the retry runs from a clean state.
+                                try { el._loaded = false; } catch(e) {}
+                                try { el.loaded = false; } catch(e) {}
+                                try { el.__loaded = false; } catch(e) {}
+                                el.load();
+                            });
+                            return result;
+                        };
+                    }
+                    wrapAddLoaders();
+                    // Preserve statics on whatever class ends up registered,
+                    // because decorators may return a wrapper that drops them.
+                    var registered = window.customElements.get(name);
+                    if (registered && registered !== target) {
+                        if (!registered.addLoaders && target.addLoaders) registered.addLoaders = target.addLoaders;
+                        if (!registered.Loaders && target.Loaders) registered.Loaders = target.Loaders;
+                        // Preserve errored elements recorded on the original
+                        // constructor when the registered class is a decorator/
+                        // proxy wrapper.
+                        if (target.__incognidium_loader_errored && target.__incognidium_loader_errored.size) {
+                            if (!registered.__incognidium_loader_errored) registered.__incognidium_loader_errored = new Set();
+                            target.__incognidium_loader_errored.forEach(function(el) { registered.__incognidium_loader_errored.add(el); });
+                        }
+                        if (debug) console.warn('[async-loader patch] copied statics to registered ' + name);
+                        target = registered;
+                        wrapAddLoaders();
+                    }
+                }
+                if (ctor && typeof ctor.addLoaders === 'function') {
+                    patchAsyncLoader(ctor);
+                }
+            },
+            get: function(name) { return registry[name] || undefined; },
+            upgrade: function(root) {
+                flushCustomElementUpgrades();
+                if (!root) return;
+                for (var name in registry) {
+                    try {
+                        var nodes = (root.querySelectorAll || function() { return []; }).call(root, name);
+                        if (typeof window.__incognidium_debug_ce === 'function') {
+                            window.__incognidium_debug_ce('upgrade', name, nodes.length);
+                        }
+                        for (var i = 0; i < nodes.length; i++) {
+                            upgradeToReal(nodes[i], registry[name], name);
+                        }
+                    } catch(e) {}
+                }
+            },
+            whenDefined: function(name) {
+                return new Promise(function(resolve) {
+                    if (registry[name]) { resolve(registry[name]); return; }
+                    whenDefinedResolvers[name] = whenDefinedResolvers[name] || [];
+                    whenDefinedResolvers[name].push(resolve);
+                });
+            }
+        };
+    })();
+    "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, ce_stub, None) {
+        let _ = s.run(scope);
+    }
+    // Optional custom-element upgrade diagnostics. Set INCOGNIDIUM_DEBUG_CE=1
+    // to see each customElements.define/upgrade call and the number of nodes upgraded.
+    if std::env::var_os("INCOGNIDIUM_DEBUG_CE").is_some() {
+        let debug = v8_str(
+            scope,
+            r#"
+        (function() {
+            // Aggregate custom-element diagnostics in-memory instead of
+            // emitting a console.warn per event, which hangs on large pages.
+            // The summary is printed on demand via __incognidium_dump_ce_debug().
+            var ceDebug = { defines: {}, upgrades: {}, connected: {}, errors: {}, async: { loads: 0, addLoaders: 0, retries: 0, loadErrors: {} } };
+            function bump(bucket, key) {
+                bucket[key] = (bucket[key] || 0) + 1;
+            }
+            window.__incognidium_debug_ce = function(kind, name, detail) {
+                if (kind === 'define') {
+                    bump(ceDebug.defines, name);
+                } else if (kind === 'upgradeAll' || kind === 'upgrade') {
+                    bump(ceDebug.upgrades, name + (kind === 'upgradeAll' ? ' (all)' : ' (root)'));
+                } else if (kind === 'runConnected-calling') {
+                    bump(ceDebug.connected, name);
+                } else if (kind === 'runConnected-error' || kind === 'upgradeAll-error' || kind === 'upgrade-failed') {
+                    bump(ceDebug.errors, name + ': ' + String(detail || '').slice(0, 80));
+                } else if (kind === 'async-load') {
+                    ceDebug.async.loads++;
+                } else if (kind === 'async-addLoaders') {
+                    ceDebug.async.addLoaders++;
+                } else if (kind === 'async-retry') {
+                    ceDebug.async.retries += (typeof name === 'number' ? name : 1);
+                } else if (kind === 'async-load-error') {
+                    var key = name || 'unknown';
+                    ceDebug.async.loadErrors[key] = (ceDebug.async.loadErrors[key] || 0) + 1;
+                }
+            };
+            window.__incognidium_dump_ce_debug = function() {
+                console.warn('[ce debug summary] ' + JSON.stringify(ceDebug, null, 2));
+            };
+        })();
+        "#,
+        );
+        if let Some(s) = v8::Script::compile(scope, debug, None) {
+            let _ = s.run(scope);
+        }
+    }
+    // Compatibility shim: some transpiled decorator helpers pass descriptors
+    // with non-function getters/setters to Object.defineProperty, which V8
+    // rejects with "Getter must be a function". Normalize the descriptor
+    // before it reaches the native API so framework classes can decorate
+    // successfully. This is a runtime polyfill, not a site-specific hack.
+    let descriptor_shim = v8_str(
+        scope,
+        r#"
+        (function() {
+            var native = Object.defineProperty;
+            Object.defineProperty = function(obj, prop, desc) {
+                if (desc && typeof desc === 'object') {
+                    var fixed = {};
+                    if ('value' in desc) fixed.value = desc.value;
+                    if ('writable' in desc) fixed.writable = desc.writable;
+                    if ('enumerable' in desc) fixed.enumerable = desc.enumerable;
+                    if ('configurable' in desc) fixed.configurable = desc.configurable;
+                    if ('get' in desc) {
+                        if (typeof desc.get === 'function') {
+                            fixed.get = desc.get;
+                        } else if (desc.get !== undefined) {
+                            // Frameworks sometimes pass a plain value where a
+                            // getter is expected (e.g. a pre-computed Array for
+                            // childNodes). Wrap it in a real function so the
+                            // accessor is accepted by the native API.
+                            var getValue = desc.get;
+                            fixed.get = function() { return getValue; };
+                        }
+                    }
+                    if ('set' in desc) {
+                        if (typeof desc.set === 'function') {
+                            fixed.set = desc.set;
+                        } else if (desc.set !== undefined) {
+                            var setValue = desc.set;
+                            fixed.set = function(v) { setValue = v; };
+                        }
+                    }
+                    return native(obj, prop, fixed);
+                }
+                return native(obj, prop, desc);
+            };
+        })();
+    "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, descriptor_shim, None) {
+        let _ = s.run(scope);
+    }
+    // localStorage / sessionStorage stubs. Many SPAs read these at
+    // boot; an empty store prevents exceptions and lets hydration proceed.
+    let storage_stub = v8_str(
+        scope,
+        r#"
+    (function() {
+        function makeStore() {
+            var store = {};
+            return {
+                getItem: function(k) { return store[k] || null; },
+                setItem: function(k, v) { store[k] = String(v); },
+                removeItem: function(k) { delete store[k]; },
+                clear: function() { store = {}; },
+                key: function(i) { return Object.keys(store)[i] || null; },
+                get length() { return Object.keys(store).length; }
+            };
+        }
+        try {
+            if (!window.localStorage) Object.defineProperty(window, 'localStorage', { value: makeStore(), configurable: true, enumerable: true });
+            if (!window.sessionStorage) Object.defineProperty(window, 'sessionStorage', { value: makeStore(), configurable: true, enumerable: true });
+        } catch(e) {}
+    })();
+    "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, storage_stub, None) {
+        let _ = s.run(scope);
+    }
+    // window.scheduler stub used by some SPAs to schedule work.
+    let scheduler_stub = v8_str(
+        scope,
+        r#"
+    (function() {
+        if (!window.scheduler) {
+            window.scheduler = {
+                yield: function() { return Promise.resolve(); },
+                postTask: function(fn) {
+                    return new Promise(function(resolve) {
+                        try { resolve(fn()); } catch(e) { resolve(undefined); }
+                    });
+                }
+            };
+        }
+    })();
+    "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, scheduler_stub, None) {
+        let _ = s.run(scope);
+    }
+
+    // Minimal ShadyDOM / ShadyCSS stubs for Lit polyfill feature detection.
+    let shady_dom = v8::Object::new(scope);
+    set_bool(scope, shady_dom, "inUse", false);
+    set_fn(scope, shady_dom, "flush", noop);
+    set_fn(scope, shady_dom, "prepareTemplate", noop);
+    let shady_dom_key = v8_str(scope, "ShadyDOM");
+    global.set(scope, shady_dom_key.into(), shady_dom.into());
+    let shady_css = v8::Object::new(scope);
+    set_bool(scope, shady_css, "nativeShadow", true);
+    set_fn(scope, shady_css, "prepareTemplate", noop);
+    set_fn(scope, shady_css, "styleElement", noop);
+    set_fn(scope, shady_css, "flushCustomProps", noop);
+    let shady_css_key = v8_str(scope, "ShadyCSS");
+    global.set(scope, shady_css_key.into(), shady_css.into());
+
+    // Worker / SharedWorker are stubbed so anti-bot scripts can construct them
+    // without executing remote payloads.
     // Worker / SharedWorker are stubbed so anti-bot scripts can construct them
     // without executing remote payloads.
     let worker_key = v8_str(scope, "Worker");
@@ -10432,6 +14117,69 @@ fn install_globals(
     let shared_worker_fn = shared_worker_tmpl.get_function(scope).unwrap();
     shared_worker_fn.set_name(v8_str(scope, "SharedWorker"));
     global.set(scope, shared_worker_key.into(), shared_worker_fn.into());
+
+    // Real ES-module dynamic-import loader. Fetches the module source, rewrites
+    // exports into a CommonJS wrapper, evaluates it, and caches the resulting
+    // exports object so subsequent imports return the same namespace.
+    let module_loader_js = v8_str(
+        scope,
+        r#"
+    (function() {
+        var cache = {};
+        function resolve(spec, base) {
+            if (typeof __incognidium_resolve_url === 'function') {
+                return __incognidium_resolve_url(spec, base || location.href);
+            }
+            return spec;
+        }
+        function fetchSource(url) {
+            if (typeof __incognidium_fetch_module === 'function') {
+                return Promise.resolve(__incognidium_fetch_module(url));
+            }
+            return Promise.reject('module fetch not available');
+        }
+        window.__incognidium_import = function(spec, base) {
+            var resolvedBase = base || location.href;
+            var url = resolve(spec, resolvedBase);
+            if (cache[url]) return Promise.resolve(cache[url]);
+            var debugImport = typeof window.__incognidium_debug_module !== 'undefined' ? window.__incognidium_debug_module : false;
+            if (debugImport) console.warn('[module import] spec=' + spec + ' base=' + resolvedBase + ' resolved=' + url);
+            return fetchSource(url).then(function(source) {
+                var exports = {};
+                var module = { exports: exports };
+                var fn = new Function('exports', 'module', '__import', source);
+                fn(exports, module, function(s){ return window.__incognidium_import(s, url); });
+                var ns = module.exports && typeof module.exports === 'object' ? module.exports : exports;
+                cache[url] = ns;
+                return ns;
+            }).catch(function(e) {
+                if (debugImport) console.warn('[module import error] ' + url + ' ' + String(e) + ' stack=' + (e && e.stack ? e.stack.slice(0,200) : ''));
+                return {};
+            });
+        };
+    })();
+    "#,
+    );
+    if let Some(loader_script) = v8::Script::compile(scope, module_loader_js, None) {
+        let _ = loader_script.run(scope);
+    }
+
+    // HTMLSlotElement — used by Lit/webcomponent feature detection.
+    let slot_key = v8_str(scope, "HTMLSlotElement");
+    let slot_tmpl = v8::FunctionTemplate::new(scope, empty_ctor);
+    let slot_fn = slot_tmpl.get_function(scope).unwrap();
+    slot_fn.set_name(v8_str(scope, "HTMLSlotElement"));
+    global.set(scope, slot_key.into(), slot_fn.into());
+
+    // Navigation API stub (window.navigation)
+    let nav_api = v8::Object::new(scope);
+    set_fn(scope, nav_api, "navigate", noop_promise);
+    set_fn(scope, nav_api, "reload", noop_promise);
+    set_fn(scope, nav_api, "back", noop_promise);
+    set_fn(scope, nav_api, "forward", noop_promise);
+    set_str(scope, nav_api, "currentEntry", "");
+    let nav_api_key = v8_str(scope, "navigation");
+    global.set(scope, nav_api_key.into(), nav_api.into());
 
     // Notification — anti-bot scripts read Notification.permission.
     let notification_key = v8_str(scope, "Notification");
@@ -10504,9 +14252,60 @@ fn install_globals(
     set_fn(scope, permissions_obj, "query", permissions_query_cb);
     let permissions_key = v8_str(scope, "permissions");
     nav.set(scope, permissions_key.into(), permissions_obj.into());
+
+    // Network Information API — used by SPAs to adapt media quality / ads.
+    let connection = v8::Object::new(scope);
+    set_str(scope, connection, "effectiveType", "4g");
+    set_str(scope, connection, "type", "wifi");
+    set_num(scope, connection, "downlink", 10.0);
+    set_num(scope, connection, "downlinkMax", 10.0);
+    set_num(scope, connection, "rtt", 50.0);
+    set_bool(scope, connection, "saveData", false);
+    set_fn(scope, connection, "addEventListener", noop);
+    set_fn(scope, connection, "removeEventListener", noop);
+    let connection_key = v8_str(scope, "connection");
+    nav.set(scope, connection_key.into(), connection.into());
+    let webkit_connection_key = v8_str(scope, "webkitConnection");
+    nav.set(scope, webkit_connection_key.into(), connection.into());
+    let moz_connection_key = v8_str(scope, "mozConnection");
+    nav.set(scope, moz_connection_key.into(), connection.into());
+
+    // NavigatorUAData stub — many modern sites read brands/mobile/platform.
+    let ua_data = v8::Object::new(scope);
+    let brands = v8::Array::new(scope, 1);
+    let brand_obj = v8::Object::new(scope);
+    set_str(scope, brand_obj, "brand", "Incognidium");
+    set_str(scope, brand_obj, "version", "0.1");
+    brands.set_index(scope, 0, brand_obj.into());
+    let brands_key = v8_str(scope, "brands");
+    ua_data.set(scope, brands_key.into(), brands.into());
+    set_bool(scope, ua_data, "mobile", false);
+    set_str(scope, ua_data, "platform", "Linux x86_64");
+    set_fn(
+        scope,
+        ua_data,
+        "getHighEntropyValues",
+        navigator_user_agent_data_high_entropy_cb,
+    );
+    let ua_data_key = v8_str(scope, "userAgentData");
+    nav.set(scope, ua_data_key.into(), ua_data.into());
+
+    // Privacy-sandbox label probe used by some ad/analytics scripts.
+    let cdl = v8::Object::new(scope);
+    set_fn(
+        scope,
+        cdl,
+        "getValue",
+        navigator_cookie_deprecation_label_cb,
+    );
+    let cdl_key = v8_str(scope, "cookieDeprecationLabel");
+    nav.set(scope, cdl_key.into(), cdl.into());
+
     let nk = v8_str(scope, "navigator");
     global.set(scope, nk.into(), nav.into());
 
+    // In strict mode, reading an undeclared global like `navigator` throws a
+    // ReferenceError even if it exists as a property of the global object. Many
     // Consent management stubs (CMP / TCF / GPP)
     let cmp = v8::Object::new(scope);
     set_fn(scope, cmp, "getConsentData", noop);
@@ -10520,98 +14319,446 @@ fn install_globals(
     let wpk = v8_str(scope, "__webpack_require__");
     global.set(scope, wpk.into(), webpack_req.into());
 
-    // URLSearchParams stub with .get()
+    // URLSearchParams backed by a real map.
     fn url_search_params_ctor(
         scope: &mut v8::HandleScope,
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
         let this_obj = args.this();
-        let query = if args.length() > 0 {
-            args.get(0).to_rust_string_lossy(scope)
-        } else {
-            String::new()
-        };
-        set_str(scope, this_obj, "__query", &query);
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        if args.length() > 0 {
+            let init = args.get(0);
+            if init.is_string() {
+                let s = init.to_rust_string_lossy(scope);
+                for pair in s.split('&') {
+                    if pair.is_empty() {
+                        continue;
+                    }
+                    let mut it = pair.splitn(2, '=');
+                    let k = it.next().unwrap_or("").to_string();
+                    let v = it.next().unwrap_or("").to_string();
+                    map.entry(k).or_default().push(v);
+                }
+            } else if let Some(obj) = init.to_object(scope) {
+                // Accept an object literal: { a: "1", b: "2" }.
+                if let Some(keys) = obj.get_own_property_names(scope, Default::default()) {
+                    let len: u32 = keys.length();
+                    for i in 0..len {
+                        if let Some(key_val) = keys.get_index(scope, i) {
+                            let key: String = key_val.to_rust_string_lossy(scope);
+                            if let Some(val) = obj.get(scope, key_val) {
+                                let value: String = val.to_rust_string_lossy(scope);
+                                map.entry(key).or_default().push(value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let stored = map
+            .iter()
+            .flat_map(|(k, vs)| vs.iter().map(move |v| format!("{}={}", k, v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        set_str(scope, this_obj, "__usp_raw", &stored);
         rv.set(this_obj.into());
     }
+
+    fn usp_parse_raw(raw: &str) -> std::collections::HashMap<String, Vec<String>> {
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for pair in raw.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let mut it = pair.splitn(2, '=');
+            let k = it.next().unwrap_or("").to_string();
+            let v = it.next().unwrap_or("").to_string();
+            map.entry(k).or_default().push(v);
+        }
+        map
+    }
+
+    fn usp_store(
+        this: v8::Local<v8::Object>,
+        map: &std::collections::HashMap<String, Vec<String>>,
+        scope: &mut v8::HandleScope,
+    ) {
+        let stored = map
+            .iter()
+            .flat_map(|(k, vs)| vs.iter().map(move |v| format!("{}={}", k, v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        set_str(scope, this, "__usp_raw", &stored);
+    }
+
     fn url_search_params_get_cb(
         scope: &mut v8::HandleScope,
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
         let this = args.this();
-        let q_key = v8_str(scope, "__query");
-        let query = match this.get(scope, q_key.into()) {
-            Some(v) => match v.to_string(scope) {
-                Some(s) => s.to_rust_string_lossy(scope),
-                None => String::new(),
-            },
-            None => String::new(),
-        };
-        let name = if args.length() > 0 {
+        let raw = get_str(scope, this, "__usp_raw");
+        let map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
             args.get(0).to_rust_string_lossy(scope)
         } else {
             String::new()
         };
-        // Very basic query string parsing
-        let val = if let Some(pos) = query.find(&format!("{}=", name)) {
-            let start = pos + name.len() + 1;
-            if let Some(end) = query[start..].find(&['&', '#']) {
-                query[start..start + end].to_string()
-            } else {
-                query[start..].to_string()
-            }
+        let value = map
+            .get(&key)
+            .and_then(|vs| vs.first())
+            .cloned()
+            .unwrap_or_default();
+        rv.set(v8_str(scope, &value).into());
+    }
+
+    fn url_search_params_get_all_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
         } else {
             String::new()
         };
-        rv.set(v8_str(scope, &val).into());
+        let arr = v8::Array::new(scope, 0);
+        if let Some(vs) = map.get(&key) {
+            let values: Vec<String> = vs.iter().cloned().collect();
+            for (i, v) in values.iter().enumerate() {
+                let s = v8_str(scope, v);
+                let _ = arr.set_index(scope, i as u32, s.into());
+            }
+        }
+        rv.set(arr.into());
     }
+
+    fn url_search_params_has_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        rv.set(v8::Boolean::new(scope, map.contains_key(&key)).into());
+    }
+
+    fn url_search_params_set_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let mut map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let value = if args.length() > 1 {
+            args.get(1).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        map.insert(key, vec![value]);
+        usp_store(this, &map, scope);
+    }
+
+    fn url_search_params_append_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let mut map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let value = if args.length() > 1 {
+            args.get(1).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        map.entry(key).or_default().push(value);
+        usp_store(this, &map, scope);
+    }
+
+    fn url_search_params_delete_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let mut map = usp_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        map.remove(&key);
+        usp_store(this, &map, scope);
+    }
+
+    fn url_search_params_to_string_cb(
+        scope: &mut v8::HandleScope,
+        _args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = _args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        rv.set(v8_str(scope, &raw).into());
+    }
+
+    fn url_search_params_for_each_cb(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__usp_raw");
+        let map = usp_parse_raw(&raw);
+        if let Ok(cb) = v8::Local::<v8::Function>::try_from(args.get(0)) {
+            let pairs: Vec<(String, Vec<String>)> = map.into_iter().collect();
+            let undef = v8::undefined(scope).into();
+            for (k, vs) in pairs {
+                for v in vs {
+                    let v_str = v8_str(scope, &v);
+                    let k_str = v8_str(scope, &k);
+                    let _ = cb.call(scope, undef, &[v_str.into(), k_str.into(), this.into()]);
+                }
+            }
+        }
+    }
+
     let usp_tmpl = v8::FunctionTemplate::new(scope, url_search_params_ctor);
     let usp_fn = usp_tmpl.get_function(scope).unwrap();
     let usp_proto_key = v8_str(scope, "prototype");
     if let Some(usp_proto_val) = usp_fn.get(scope, usp_proto_key.into()) {
         if let Ok(usp_proto) = v8::Local::<v8::Object>::try_from(usp_proto_val) {
-            let get_key = v8_str(scope, "get");
-            if let Some(get_fn) = v8::Function::new(scope, url_search_params_get_cb) {
-                usp_proto.set(scope, get_key.into(), get_fn.into());
-            }
+            set_fn(scope, usp_proto, "get", url_search_params_get_cb);
+            set_fn(scope, usp_proto, "getAll", url_search_params_get_all_cb);
+            set_fn(scope, usp_proto, "has", url_search_params_has_cb);
+            set_fn(scope, usp_proto, "set", url_search_params_set_cb);
+            set_fn(scope, usp_proto, "append", url_search_params_append_cb);
+            set_fn(scope, usp_proto, "delete", url_search_params_delete_cb);
+            set_fn(scope, usp_proto, "toString", url_search_params_to_string_cb);
+            set_fn(scope, usp_proto, "forEach", url_search_params_for_each_cb);
         }
     }
     let usp_key = v8_str(scope, "URLSearchParams");
     global.set(scope, usp_key.into(), usp_fn.into());
 
-    // Headers constructor stub
+    // Headers backed by a real map.
     fn headers_ctor(
         scope: &mut v8::HandleScope,
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
         let this_obj = args.this();
-        set_str(scope, this_obj, "__raw", "");
+        let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if args.length() > 0 {
+            let init = args.get(0);
+            if init.is_string() {
+                let s = init.to_rust_string_lossy(scope);
+                for pair in s.split('\n') {
+                    if let Some((k, v)) = pair.split_once(':') {
+                        map.insert(k.trim().to_lowercase(), v.trim().to_string());
+                    }
+                }
+            } else if let Some(obj) = init.to_object(scope) {
+                if let Some(keys) = obj.get_own_property_names(scope, Default::default()) {
+                    let len: u32 = keys.length();
+                    for i in 0..len {
+                        if let Some(key_val) = keys.get_index(scope, i) {
+                            let key: String = key_val.to_rust_string_lossy(scope);
+                            if let Some(val) = obj.get(scope, key_val) {
+                                let value: String = val.to_rust_string_lossy(scope);
+                                map.insert(key.to_lowercase(), value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let stored = map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_str(scope, this_obj, "__headers_raw", &stored);
         rv.set(this_obj.into());
     }
+
+    fn headers_parse_raw(raw: &str) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        for line in raw.lines() {
+            if let Some((k, v)) = line.split_once(':') {
+                map.insert(k.to_string(), v.trim().to_string());
+            }
+        }
+        map
+    }
+
+    fn headers_store(
+        this: v8::Local<v8::Object>,
+        map: &std::collections::HashMap<String, String>,
+        scope: &mut v8::HandleScope,
+    ) {
+        let stored = map
+            .iter()
+            .map(|(k, v)| format!("{}: {}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+        set_str(scope, this, "__headers_raw", &stored);
+    }
+
     fn headers_get_cb2(
         scope: &mut v8::HandleScope,
         args: v8::FunctionCallbackArguments,
         mut rv: v8::ReturnValue,
     ) {
-        let _name = if args.length() > 0 {
-            args.get(0).to_rust_string_lossy(scope)
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let map = headers_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope).to_lowercase()
         } else {
             String::new()
         };
-        rv.set(v8_str(scope, "").into());
+        let value = map.get(&key).cloned().unwrap_or_default();
+        rv.set(v8_str(scope, &value).into());
     }
+
+    fn headers_has_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let map = headers_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope).to_lowercase()
+        } else {
+            String::new()
+        };
+        rv.set(v8::Boolean::new(scope, map.contains_key(&key)).into());
+    }
+
+    fn headers_set_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = headers_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope).to_lowercase()
+        } else {
+            String::new()
+        };
+        let value = if args.length() > 1 {
+            args.get(1).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        map.insert(key, value);
+        headers_store(this, &map, scope);
+    }
+
+    fn headers_append_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = headers_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope).to_lowercase()
+        } else {
+            String::new()
+        };
+        let value = if args.length() > 1 {
+            args.get(1).to_rust_string_lossy(scope)
+        } else {
+            String::new()
+        };
+        let existing = map.get(&key).cloned().unwrap_or_default();
+        let merged = if existing.is_empty() {
+            value
+        } else {
+            format!("{}, {}", existing, value)
+        };
+        map.insert(key, merged);
+        headers_store(this, &map, scope);
+    }
+
+    fn headers_delete_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let mut map = headers_parse_raw(&raw);
+        let key = if args.length() > 0 {
+            args.get(0).to_rust_string_lossy(scope).to_lowercase()
+        } else {
+            String::new()
+        };
+        map.remove(&key);
+        headers_store(this, &map, scope);
+    }
+
+    fn headers_for_each_cb2(
+        scope: &mut v8::HandleScope,
+        args: v8::FunctionCallbackArguments,
+        mut _rv: v8::ReturnValue,
+    ) {
+        let this = args.this();
+        let raw = get_str(scope, this, "__headers_raw");
+        let map = headers_parse_raw(&raw);
+        if let Ok(cb) = v8::Local::<v8::Function>::try_from(args.get(0)) {
+            let pairs: Vec<(String, String)> = map.into_iter().collect();
+            let undef = v8::undefined(scope).into();
+            for (k, v) in pairs {
+                let v_str = v8_str(scope, &v);
+                let k_str = v8_str(scope, &k);
+                let _ = cb.call(scope, undef, &[v_str.into(), k_str.into(), this.into()]);
+            }
+        }
+    }
+
     let headers_tmpl = v8::FunctionTemplate::new(scope, headers_ctor);
     let headers_fn = headers_tmpl.get_function(scope).unwrap();
     let headers_proto_key = v8_str(scope, "prototype");
     if let Some(headers_proto_val) = headers_fn.get(scope, headers_proto_key.into()) {
         if let Ok(headers_proto) = v8::Local::<v8::Object>::try_from(headers_proto_val) {
-            let get_key = v8_str(scope, "get");
-            if let Some(get_fn) = v8::Function::new(scope, headers_get_cb2) {
-                headers_proto.set(scope, get_key.into(), get_fn.into());
-            }
+            set_fn(scope, headers_proto, "get", headers_get_cb2);
+            set_fn(scope, headers_proto, "has", headers_has_cb2);
+            set_fn(scope, headers_proto, "set", headers_set_cb2);
+            set_fn(scope, headers_proto, "append", headers_append_cb2);
+            set_fn(scope, headers_proto, "delete", headers_delete_cb2);
+            set_fn(scope, headers_proto, "forEach", headers_for_each_cb2);
         }
     }
     let headers_key = v8_str(scope, "Headers");
@@ -10889,7 +15036,10 @@ fn install_globals(
                 if (!(this instanceof URLSearchParams)) return new URLSearchParams(init);
                 this._map = {};
                 if (typeof init === 'string' && init) {
-                    init.split('&').forEach(function(pair) {
+                    // Strip a leading '?' from a search string (real browsers
+                    // accept either form).
+                    var s = init.charAt(0) === '?' ? init.slice(1) : init;
+                    s.split('&').forEach(function(pair) {
                         var idx = pair.indexOf('=');
                         var k = idx >= 0 ? pair.slice(0, idx) : pair;
                         var v = idx >= 0 ? pair.slice(idx + 1) : '';
@@ -10972,11 +15122,132 @@ fn install_globals(
             window.Window = function Window() {};
             window.structuredClone = function structuredClone(value) { return value; };
             document.styleSheets = [];
+
+            // Media APIs referenced by async bundle loaders; providing minimal
+            // constructors prevents ReferenceError during module evaluation.
+            if (typeof window.MediaError === 'undefined') {
+                function MediaError() {}
+                MediaError.prototype.code = 0;
+                MediaError.prototype.message = '';
+                window.MediaError = MediaError;
+            }
         })();
         "#,
     );
     if let Some(s) = v8::Script::compile(scope, usp_stub, None) {
         let _ = s.run(scope);
+    }
+
+    // SPA-specific globals that are cheap to provide and prevent silent bails.
+    // window.process is used by some React/Webpack dev-guard checks, and
+    // SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN is used by some feed apps.
+    let spa_globals = v8_str(
+        scope,
+        r#"
+        (function() {
+            if (typeof window.process === 'undefined') {
+                window.process = { env: {} };
+            }
+            if (typeof window.SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN === 'undefined') {
+                window.SKIP_FEED_ELEMENT_LOAD_PERF_MARK_AUTO_RUN = false;
+            }
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, spa_globals, None) {
+        let _ = s.run(scope);
+    }
+
+    // Instrument undefined reads on document and navigator so we can discover
+    // which missing APIs make client-rendered apps bail before fetching real
+    // content. Runs after all globals are installed, only logs once per key.
+    let trap_js = v8_str(
+        scope,
+        r#"
+        (function() {
+            function makeTrap(obj, name) {
+                if (!obj || typeof obj !== 'object') return obj;
+                var seen = {};
+                return new Proxy(obj, {
+                    get: function(target, prop, receiver) {
+                        if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver);
+                        var key = String(prop);
+                        if (key === 'undefined') return undefined;
+                        var val = Reflect.get(target, prop, receiver);
+                        if (!seen[key] && val === undefined) {
+                            seen[key] = true;
+                            console.warn('[trap] ' + name + '.' + key + ' is undefined');
+                        }
+                        return val;
+                    }
+                });
+            }
+            try {
+                if (window.document) window.document = makeTrap(window.document, 'document');
+                if (window.navigator) window.navigator = makeTrap(window.navigator, 'navigator');
+            } catch(e) {}
+        })();
+        "#,
+    );
+    if let Some(s) = v8::Script::compile(scope, trap_js, None) {
+        let _ = s.run(scope);
+    }
+
+    // Create lexical bindings for the globals page scripts read directly.
+    // Must run after all globals (and any diagnostic proxies) are installed
+    // so bare identifiers like `navigator` resolve to the final objects.
+    let lexical_globals = v8_str(
+        scope,
+        "var navigator = window.navigator; var location = window.location; var document = window.document;",
+    );
+    if let Some(s) = v8::Script::compile(scope, lexical_globals, None) {
+        let _ = s.run(scope);
+    }
+}
+
+/// Wrap a script source in an IIFE so top-level `const`/`let` declarations
+/// in one \`<script>\` tag do not collide with declarations in another when all
+/// scripts run in the same V8 context. The sourceURL comment is preserved so
+/// error messages still identify the original script.
+fn wrap_script_in_iife(source: &str, _origin: &str) -> String {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return source.to_string();
+    }
+    if trimmed.starts_with("(function") || trimmed.starts_with("(async function") {
+        return source.to_string();
+    }
+    // Heuristic: module transpilation already wraps; leave it alone if it ends
+    // with a matching IIFE invocation.
+    if trimmed.ends_with("})();") || trimmed.ends_with("})()") {
+        return source.to_string();
+    }
+    let mut body = source.to_string();
+    let mut source_url = String::new();
+    if let Some(pos) = body.rfind("//# sourceURL=") {
+        source_url = body[pos..].to_string();
+        body.truncate(pos);
+    } else if let Some(pos) = body.rfind("//# sourceMappingURL=") {
+        source_url = body[pos..].to_string();
+        body.truncate(pos);
+    }
+    // Trim trailing whitespace/newlines so the final sourceURL comment is clean.
+    body = body.trim_end().to_string();
+    if !source_url.is_empty() {
+        format!(
+            "(function() {{
+{}
+}})();
+{}",
+            body, source_url
+        )
+    } else {
+        format!(
+            "(function() {{
+{}
+}})();",
+            body
+        )
     }
 }
 
@@ -10986,7 +15257,7 @@ const MAX_SCRIPT_SIZE: usize = 16 * 1024 * 1024; // 16MB per script
 const MAX_TOTAL_JS: usize = 64 * 1024 * 1024; // 64MB total
 const MAX_JS_TIME_SECS: u64 = 30;
 const MAX_SCRIPT_TIME_SECS: u64 = 10; // Per-script wall-clock timeout
-const MAX_TIMEOUT_CALLBACKS: usize = 2_000; // Per-page setTimeout/setInterval budget
+const MAX_TIMEOUT_CALLBACKS: usize = 10_000; // Per-page setTimeout/setInterval budget
 
 /// Run a synchronous closure with a V8 execution watchdog. If the closure does
 /// not finish within `timeout`, the isolate is terminated and the closure is
@@ -11013,100 +15284,6 @@ fn run_with_execution_timeout<T, F: FnOnce() -> T>(
     result
 }
 
-/// Transpile an ES module source to a regular script so it can be compiled
-/// and run by V8::Script. This is a general fallback for `<script type="module">`
-/// because the engine does not yet have a full ES module loader. The rewrite
-/// is conservative and only targets syntax that is illegal in scripts but common
-/// in bundled web apps (import.meta, dynamic imports and export declarations).
-pub fn transpile_module_to_script(source: &str, origin: &str) -> String {
-    let mut out = source.to_string();
-    // import.meta.url
-    out = out.replace("import.meta.url", &format!("\"{}\"", origin));
-    // import.meta -> { url: origin }
-    out = out.replace("import.meta", &format!("{{ url: \"{}\" }}", origin));
-
-    // Rewrite dynamic imports: import(...) -> Promise.resolve({}).
-    let mut result = String::with_capacity(out.len());
-    let mut chars = out.char_indices().peekable();
-    while let Some((idx, ch)) = chars.next() {
-        if ch == 'i'
-            && out[idx..].starts_with("import")
-            && out[idx + 6..].chars().next().map_or(false, |c| c == '(')
-        {
-            let mut depth = 1usize;
-            let mut end = idx + 7;
-            let mut finished = false;
-            for c in out[idx + 7..].chars() {
-                end += 1;
-                if c == '(' {
-                    depth += 1;
-                } else if c == ')' {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
-                    if depth == 0 {
-                        finished = true;
-                        break;
-                    }
-                }
-            }
-            if finished {
-                result.push_str("Promise.resolve({})");
-                while let Some(&(next_i, _)) = chars.peek() {
-                    if next_i >= end {
-                        break;
-                    }
-                    chars.next();
-                }
-                continue;
-            }
-        }
-        result.push(ch);
-    }
-
-    // Strip export declarations.  This is a coarse source-level rewrite that
-    // removes the `export` keyword and any trailing `from "..."` clause.  It is
-    // enough for the inline helper modules that Reddit injects via data: URLs.
-    let mut stripped = String::with_capacity(result.len());
-    let mut chars = result.char_indices().peekable();
-    while let Some((idx, ch)) = chars.next() {
-        if ch == 'e' && result[idx..].starts_with("export") {
-            let after = idx + 6;
-            if result[after..]
-                .chars()
-                .next()
-                .map_or(false, |c| c.is_whitespace() || c == '{' || c == '*')
-            {
-                let mut found_semicolon = false;
-                while let Some((_, c)) = chars.next() {
-                    if c == ';' {
-                        found_semicolon = true;
-                        break;
-                    }
-                    if c == '\n' {
-                        break;
-                    }
-                }
-                if found_semicolon {
-                    while let Some(&(_, c)) = chars.peek() {
-                        if c == '\n' {
-                            chars.next();
-                            break;
-                        }
-                        if !c.is_whitespace() {
-                            break;
-                        }
-                        chars.next();
-                    }
-                }
-                continue;
-            }
-        }
-        stripped.push(ch);
-    }
-    stripped
-}
-
 pub fn execute_scripts_v8(
     doc: Document,
     scripts: &[super::ScriptEntry],
@@ -11117,6 +15294,7 @@ pub fn execute_scripts_v8(
     cache_clear();
     clear_timeout_queue();
     clear_loaded_scripts();
+    clear_module_registry();
     clear_window_event_listeners();
     DOCUMENT_OBJ.with(|d| *d.borrow_mut() = None);
 
@@ -11134,6 +15312,9 @@ pub fn execute_scripts_v8(
         let global = context.global(scope);
 
         install_globals(scope, global, viewport_width, viewport_height);
+
+        // Initialize readyState for this page execution before scripts run.
+        DOCUMENT_READY_STATE.with(|s| *s.borrow_mut() = "loading".to_string());
 
         // Stub locale-sensitive APIs before page scripts run.
         // The v8 build in this project does not bundle ICU data, so calling
@@ -11300,6 +15481,7 @@ pub fn execute_scripts_v8(
             if let Some(doc) = document_obj(scope) {
                 set_str(scope, doc, "URL", &base_url);
                 set_str(scope, doc, "documentURI", &base_url);
+                set_str(scope, doc, "baseURI", &base_url);
                 let loc_key = v8_str(scope, "location");
                 if let Some(loc_val) = global.get(scope, loc_key.into()) {
                     doc.set(scope, loc_key.into(), loc_val);
@@ -11312,11 +15494,8 @@ pub fn execute_scripts_v8(
         let mut total_bytes = 0usize;
 
         for script in scripts {
-            let mut source = if script.module {
-                transpile_module_to_script(&script.source, &script.origin)
-            } else {
-                script.source.clone()
-            };
+            let mut source =
+                crate::transpile::transpile_module_to_script(&script.source, &script.origin);
             // Optional: capture JS stacks for hard-to-diagnose script errors.
             if std::env::var_os("INCOGNIDIUM_JS_STACK").is_some() {
                 source = format!(
@@ -11402,6 +15581,7 @@ pub fn execute_scripts_v8(
             let was_terminated =
                 run_with_execution_timeout(&isolate_handle, per_script_timeout, || {
                     let tc = &mut v8::TryCatch::new(scope);
+                    let source = wrap_script_in_iife(&source, &script.origin);
                     let source_v8 = v8_str(tc, &source);
                     match v8::Script::compile(tc, source_v8, None) {
                         Some(script_obj) => match script_obj.run(tc) {
@@ -11510,10 +15690,18 @@ pub fn execute_scripts_v8(
                     eprintln!("JS slow ({:.1}s): {}", elapsed.as_secs_f32(), script.origin);
                 }
             }
-            // Flush timeouts queued by the script and any callbacks it fires.
-            // Challenge orchestrators often chain setTimeout calls, so one drain
-            // is not enough.
-            flush_timeout_queue(scope, 10);
+            // Modern async module loaders and webpack-style chunk loaders append
+            // <script> elements during script execution and then attach onload /
+            // onerror / addEventListener handlers on the same element after
+            // appendChild returns. Flush those deferred dynamic scripts first, so
+            // their load/error handlers resolve before any setTimeout(0) callbacks
+            // queued by the same script run.
+            flush_pending_dynamic_scripts(scope);
+            // Do not flush timeouts here. Browsers run the inline script as part
+            // of the parser task, then fire DOMContentLoaded synchronously at the
+            // end of parsing, and only then process queued setTimeout tasks. We
+            // preserve the same ordering so readystatechange/DOMContentLoaded
+            // listeners see the correct state before setTimeout(0) callbacks run.
             // If this script was terminated, skip remaining scripts to avoid a
             // cascade of timeouts on the same runaway page.
             if was_terminated {
@@ -11527,22 +15715,74 @@ pub fn execute_scripts_v8(
         // Run any remaining timeouts enqueued by the final scripts.
         let cleanup_timeout = std::time::Duration::from_secs(MAX_SCRIPT_TIME_SECS);
         run_with_execution_timeout(&isolate_handle, cleanup_timeout, || {
-            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
+            // Flush any queued custom-element upgrades before firing load, so
+            // definitions that arrived during script execution are applied.
+            flush_custom_elements(scope);
 
-            eprintln!("[JS] firing DOMContentLoaded/load events");
-            // Fire DOMContentLoaded / load events so pages that deferred bootstrap
-            // code in addEventListener handlers actually run it, then flush any
-            // timeouts those handlers queued.
-            if let Some(doc) = document_obj(scope) {
-                set_str(scope, doc, "readyState", "interactive");
-            }
+            // Fire all document lifecycle events synchronously before processing
+            // any queued timeouts. Browsers emit readystatechange=interactive,
+            // DOMContentLoaded, readystatechange=complete and load as part of the
+            // parser's end-of-document task; setTimeout(0) callbacks run only
+            // after that task yields.
+            set_document_ready_state(scope, "interactive");
+            dispatch_document_event(scope, "DOMContentLoaded");
             dispatch_window_event(scope, "DOMContentLoaded");
-            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
-            if let Some(doc) = document_obj(scope) {
-                set_str(scope, doc, "readyState", "complete");
-            }
+            set_document_ready_state(scope, "complete");
+            dispatch_document_event(scope, "load");
             dispatch_window_event(scope, "load");
+            // Now drain timeouts that were queued during script execution and by
+            // the lifecycle handlers above. Dynamic scripts appended by load-event
+            // handlers run afterwards.
             flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
+            flush_pending_dynamic_scripts(scope);
+            flush_timeout_queue(scope, MAX_TIMEOUT_CALLBACKS);
+            // Dump aggregated CE/debug state synchronously while the isolate is
+            // still alive, so large pages do not hang on per-event logs.
+            if std::env::var_os("INCOGNIDIUM_DEBUG_CE").is_some() {
+                let dump = v8_str(
+                    scope,
+                    r#"
+                    (function() {
+                        var out = [];
+                        if (typeof window.__incognidium_dump_ce_debug === 'function') {
+                            window.__incognidium_dump_ce_debug();
+                        }
+                        try {
+                            var registry = window.customElements && typeof window.customElements.get === 'function' ? window.customElements : null;
+                            if (registry) {
+                                var names = (typeof window.__incognidium_defined_ce === 'object' && window.__incognidium_defined_ce) ? Object.keys(window.__incognidium_defined_ce) : [];
+                                out.push('[ce] defined custom elements: ' + names.length);
+                            }
+                            var loader = window.SML;
+                            if (loader && loader.moduleRegistry) {
+                                var regs = loader.moduleRegistry;
+                                var states = { declared: 0, evaluated: 0, evaluating: 0, rejected: 0 };
+                                Object.keys(regs).forEach(function(k){
+                                    var m = regs[k];
+                                    if (m.isDeclared) states.declared++;
+                                    if (m.isEvaluated) states.evaluated++;
+                                    if (m.isEvaluating) states.evaluating++;
+                                    if (m.isRejected) states.rejected++;
+                                });
+                                out.push('[sml] declared=' + states.declared + ' evaluated=' + states.evaluated + ' evaluating=' + states.evaluating + ' rejected=' + states.rejected);
+                            }
+                            try {
+                                var u = new URL('https://cdn.example.com/js/concat?prefix=en-US/');
+                                out.push('[url] searchParams ok=' + (u.searchParams && u.searchParams.get('prefix') === 'en-US/'));
+                            } catch(e) {
+                                out.push('[url] error: ' + String(e));
+                            }
+                        } catch (e) {
+                            out.push('[debug] inspect error: ' + String(e));
+                        }
+                        if (out.length) console.warn(out.join('\n'));
+                    })();
+                "#,
+                );
+                if let Some(s) = v8::Script::compile(scope, dump, None) {
+                    let _ = s.run(scope);
+                }
+            }
         });
     }
 
@@ -11658,7 +15898,6 @@ fn form_request_submit_cb(
     _: v8::ReturnValue,
 ) {
     let node_id = extract_node_id(scope, args.this().into()).unwrap_or(usize::MAX);
-    eprintln!("[JS] requestSubmit node_id={}", node_id);
     with_dom(|state| {
         if let Some(node) = state.document.nodes.get(node_id) {
             if let NodeData::Element(el) = &node.data {
@@ -11702,6 +15941,59 @@ fn form_request_submit_cb(
     });
 }
 
+/// Synchronous form.submit() used by lightweight JS challenge orchestrators.
+fn form_submit_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue,
+) {
+    form_request_submit_cb(scope, args, rv);
+}
+
+/// Minimal `contentDocument` for iframes so feature-detection scripts
+/// (es-module-shims, etc.) can call `iframe.contentDocument.write(...)`.
+fn install_iframe_apis(scope: &mut v8::HandleScope, iframe_obj: v8::Local<v8::Object>) {
+    let doc = v8::Object::new(scope);
+    let head = v8::Object::new(scope);
+    set_fn(scope, head, "appendChild", noop);
+    let head_key = v8_str(scope, "head");
+    doc.set(scope, head_key.into(), head.into());
+    set_fn(scope, doc, "write", noop);
+    set_fn(scope, doc, "writeln", noop);
+    set_fn(scope, doc, "open", noop);
+    set_fn(scope, doc, "close", noop);
+    set_fn(scope, doc, "createElement", create_element_return_self_cb);
+    set_fn(scope, doc, "createTextNode", create_text_node_cb);
+    set_fn(scope, doc, "appendChild", noop);
+    set_bool(scope, doc, "childNodes", false);
+    let body = v8::Object::new(scope);
+    set_fn(scope, body, "appendChild", noop);
+    let body_key = v8_str(scope, "body");
+    doc.set(scope, body_key.into(), body.into());
+    let cd_key = v8_str(scope, "contentDocument");
+    let cw_key = v8_str(scope, "contentWindow");
+    let _ = iframe_obj.set(scope, cd_key.into(), doc.into());
+    let window_obj = scope.get_current_context().global(scope);
+    let _ = iframe_obj.set(scope, cw_key.into(), window_obj.into());
+}
+
+fn create_element_return_self_cb(
+    scope: &mut v8::HandleScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let tag = if args.length() > 0 {
+        args.get(0).to_rust_string_lossy(scope)
+    } else {
+        "div".to_string()
+    };
+    let obj = v8::Object::new(scope);
+    set_str(scope, obj, "tagName", &tag.to_ascii_uppercase());
+    set_fn(scope, obj, "setAttribute", noop);
+    set_fn(scope, obj, "appendChild", noop);
+    rv.set(obj.into());
+}
+
 // ── document.forms ──────────────────────────────────────────────────────
 fn document_forms_getter_cb(
     scope: &mut v8::HandleScope,
@@ -11709,7 +16001,6 @@ fn document_forms_getter_cb(
     _args: v8::PropertyCallbackArguments,
     mut rv: v8::ReturnValue,
 ) {
-    eprintln!("[JS] document.forms getter");
     let (ids, named): (Vec<NodeId>, Vec<(String, NodeId)>) = with_dom(|state| {
         let mut ids = Vec::new();
         let mut named = Vec::new();
@@ -11732,7 +16023,6 @@ fn document_forms_getter_cb(
         }
         (ids, named)
     });
-    eprintln!("[JS] document.forms found {} forms", ids.len());
     let collection = v8::Object::new(scope);
     set_int(scope, collection, "length", ids.len() as i32);
     for (i, id) in ids.into_iter().enumerate() {
@@ -11823,4 +16113,495 @@ fn document_location_getter_cb(
         set_str(scope, loc, "protocol", url.scheme());
     }
     rv.set(loc.into());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use incognidium_dom::ElementData;
+
+    fn make_el(tag: &str, attrs: &[(&str, &str)]) -> incognidium_dom::ElementData {
+        let mut el = ElementData::new(tag);
+        for (k, v) in attrs {
+            el.attributes.insert(k.to_string(), v.to_string());
+        }
+        el
+    }
+
+    #[test]
+    fn match_simple_selector_tag_with_unquoted_attr_value() {
+        let el = make_el("template", &[("for", "s_8a5ed_0")]);
+        assert!(match_simple_selector(&el, "template[for=s_8a5ed_0]"));
+    }
+
+    #[test]
+    fn match_simple_selector_tag_with_quoted_attr_value() {
+        let el = make_el("template", &[("for", "s_8a5ed_0")]);
+        assert!(match_simple_selector(&el, "template[for=\"s_8a5ed_0\"]"));
+    }
+
+    #[test]
+    fn match_simple_selector_attr_value_only() {
+        let el = make_el("template", &[("for", "s_8a5ed_0")]);
+        assert!(match_simple_selector(&el, "[for=s_8a5ed_0]"));
+    }
+
+    #[test]
+    fn match_simple_selector_tag_with_class_and_attr() {
+        let el = make_el("div", &[("class", "foo bar"), ("data-id", "x")]);
+        assert!(match_simple_selector(&el, "div.foo[data-id=x]"));
+        assert!(match_simple_selector(&el, "div.bar[data-id=x]"));
+        assert!(!match_simple_selector(&el, "div.baz[data-id=x]"));
+    }
+
+    #[test]
+    fn match_simple_selector_id_and_attr() {
+        let el = make_el("my-app-feed", &[("id", "feed"), ("data-sort", "best")]);
+        assert!(match_simple_selector(&el, "#feed[data-sort=best]"));
+        assert!(!match_simple_selector(&el, "#feed[data-sort=hot]"));
+    }
+
+    #[test]
+    fn match_simple_selector_still_matches_bare_tag() {
+        let el = make_el("article", &[]);
+        assert!(match_simple_selector(&el, "article"));
+        assert!(!match_simple_selector(&el, "div"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_named_exports_minified() {
+        let src = "var r=1,n=2;export{r as default,n as truncateDataUrlStackLine};";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(out.contains("exports.default = r;"));
+        assert!(out.contains("exports.truncateDataUrlStackLine = n;"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_named_exports_spaced() {
+        let src = "const a = 1; const b = 2; export { a, b as c };";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(out.contains("exports.a = a;"));
+        assert!(out.contains("exports.c = b;"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_default() {
+        let src = "export default function foo() { return 1; };";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export default"));
+        assert!(out.contains("module.exports = function foo() { return 1; };"));
+        assert!(out.contains("module.exports.default = function foo() { return 1; };"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_const() {
+        let src = "export const answer = 42;";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(out.contains("const answer = 42;"));
+        assert!(out.contains("exports.answer = answer;"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_function() {
+        let src = "export function bar() { return 3; }";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(out.contains("function bar() { return 3; }"));
+        assert!(out.contains("exports.bar = bar;"));
+    }
+
+    #[test]
+    fn module_source_to_cjs_re_export_removed() {
+        let src = "export { foo, bar as baz } from './other';";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(!out.contains(" from "));
+        assert_eq!(out.trim(), "");
+    }
+
+    #[test]
+    fn module_source_to_cjs_star_export_removed() {
+        let src = "export * from './other';";
+        let out = module_source_to_cjs(src);
+        assert!(!out.contains("export ") && !out.contains("export{"));
+        assert!(!out.contains(" from "));
+        assert_eq!(out.trim(), "");
+    }
+
+    #[test]
+    fn replace_child_updates_parent_and_children() {
+        let html = r#"
+            <!doctype html>
+            <html><body>
+                <div id="parent"><span id="old">text</span></div>
+            </body></html>
+        "#;
+        let doc = incognidium_html::parse_html(html);
+        let script = r#"
+            var parent = document.getElementById('parent');
+            var oldChild = document.getElementById('old');
+            var newChild = document.createElement('p');
+            newChild.id = 'new';
+            parent.replaceChild(newChild, oldChild);
+            var result = {
+                parentChildren: parent.children.length,
+                firstChildTag: parent.children[0] && parent.children[0].tagName,
+                newParent: !!newChild.parentNode,
+                oldParent: !!oldChild.parentNode,
+                newId: newChild.id
+            };
+            document.body.setAttribute('data-test-result', JSON.stringify(result));
+        "#;
+        let entry = super::super::ScriptEntry {
+            source: script.to_string(),
+            origin: "inline".to_string(),
+            module: false,
+        };
+        let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
+        let body_id = out.body().expect("body");
+        let result_json = match &out.nodes[body_id].data {
+            incognidium_dom::NodeData::Element(ref e) => {
+                e.get_attr("data-test-result").expect("result")
+            }
+            _ => panic!("body not element"),
+        };
+        let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
+        assert_eq!(result["parentChildren"].as_i64(), Some(1));
+        assert_eq!(result["firstChildTag"].as_str(), Some("P"));
+        assert!(result["newParent"].as_bool().unwrap_or(false));
+        assert!(!result["oldParent"].as_bool().unwrap_or(true));
+        assert_eq!(result["newId"].as_str(), Some("new"));
+    }
+
+    #[test]
+    fn custom_element_upgrade_calls_constructor_and_preserves_attributes() {
+        let html = r#"
+            <!doctype html>
+            <html><body>
+                <my-box id="b1" data-color="red">hello</my-box>
+            </body></html>
+        "#;
+        let doc = incognidium_html::parse_html(html);
+        // All assertions run in the same JS isolate so own properties set by
+        // the constructor survive until we write them into the DOM.
+        let script = r#"
+            class MyBox extends HTMLElement {
+                static get observedAttributes() {
+                    return ['data-color'];
+                }
+                constructor() {
+                    super();
+                    this.created = true;
+                    this.shadowReady = !!this.shadowRoot;
+                    this.colorFromCallback = null;
+                }
+                attributeChangedCallback(name, oldValue, newValue) {
+                    if (name === 'data-color') {
+                        this.colorFromCallback = newValue;
+                    }
+                }
+                connectedCallback() {
+                    this.connected = true;
+                }
+            }
+            customElements.define('my-box', MyBox);
+            // Synchronous upgrade path for the test, mirroring the real
+            // customElements.upgrade(root) API.
+            customElements.upgrade(document.body);
+            var el = document.getElementById('b1');
+            var result = {
+                tag: el ? el.tagName : null,
+                color: el ? el.getAttribute('data-color') : null,
+                colorInsensitive: el ? el.getAttribute('DATA-COLOR') : null,
+                created: el && el.created === true,
+                connected: el && el.connected === true,
+                text: el ? el.textContent : null,
+                callbackFired: el && el.colorFromCallback === 'red'
+            };
+            document.body.setAttribute('data-test-result', JSON.stringify(result));
+        "#;
+        let entry = super::super::ScriptEntry {
+            source: script.to_string(),
+            origin: "inline".to_string(),
+            module: false,
+        };
+        let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
+        let body_id = out.body().expect("body");
+        let body_el = &out.nodes[body_id].data;
+        let result_json = if let incognidium_dom::NodeData::Element(ref e) = body_el {
+            e.get_attr("data-test-result").expect("test result attr")
+        } else {
+            panic!("body not element");
+        };
+        let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
+        assert_eq!(result["tag"].as_str(), Some("MY-BOX"));
+        assert_eq!(result["color"].as_str(), Some("red"));
+        assert_eq!(result["colorInsensitive"].as_str(), Some("red"));
+        assert!(result["created"].as_bool().unwrap_or(false));
+        assert!(result["connected"].as_bool().unwrap_or(false));
+        assert_eq!(result["text"].as_str(), Some("hello"));
+        assert!(result["callbackFired"].as_bool().unwrap_or(false));
+    }
+
+    #[test]
+    fn ready_state_transitions_and_readystatechange_event_fire() {
+        let html = r#"<!doctype html><html><body></body></html>"#;
+        let doc = incognidium_html::parse_html(html);
+        let script = r#"
+            window.states = [];
+            document.onreadystatechange = function() { window.states.push('inline:' + document.readyState); };
+            document.addEventListener('readystatechange', function() { window.states.push('ae:' + document.readyState); });
+            // Also record the state immediately before the transition machinery runs.
+            window.initialReadyState = document.readyState;
+            // Capture the result once we reach 'complete', after the current
+            // flush of readystatechange handlers and their queued timeouts has
+            // finished, so both the inline and addEventListener handlers have
+            // already run.
+            document.addEventListener('readystatechange', function onComplete() {
+                if (document.readyState === 'complete') {
+                    document.removeEventListener('readystatechange', onComplete);
+                    setTimeout(function() {
+                        document.body.setAttribute('data-test-result', JSON.stringify({
+                            initial: window.initialReadyState,
+                            states: window.states,
+                            final: document.readyState
+                        }));
+                    }, 0);
+                }
+            });
+        "#;
+        let entry = super::super::ScriptEntry {
+            source: script.to_string(),
+            origin: "inline".to_string(),
+            module: false,
+        };
+        let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
+        let body_id = out.body().expect("body");
+        let body_el = &out.nodes[body_id].data;
+        let result_json = if let incognidium_dom::NodeData::Element(ref e) = body_el {
+            e.get_attr("data-test-result").expect("test result attr")
+        } else {
+            panic!("body not element");
+        };
+        let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
+        assert_eq!(result["initial"].as_str().unwrap_or(""), "loading");
+        let state_arr = result["states"].as_array().expect("states array");
+        // The inline handler and the addEventListener handler should both fire
+        // for the interactive and complete transitions.
+        let joined: Vec<String> = state_arr
+            .iter()
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            joined.contains(&"inline:interactive".to_string()),
+            "inline readystatechange should see interactive"
+        );
+        assert!(
+            joined.contains(&"ae:interactive".to_string()),
+            "addEventListener readystatechange should see interactive"
+        );
+        assert!(
+            joined.contains(&"inline:complete".to_string()),
+            "inline readystatechange should see complete"
+        );
+        assert!(
+            joined.contains(&"ae:complete".to_string()),
+            "addEventListener readystatechange should see complete"
+        );
+        assert_eq!(result["final"].as_str().unwrap_or(""), "complete");
+    }
+
+    #[test]
+    fn deferred_dynamic_script_fires_onload_and_addeventlistener() {
+        let html = r#"
+            <!doctype html>
+            <html><body>
+                <div id="target"></div>
+            </body></html>
+        "#;
+        let doc = incognidium_html::parse_html(html);
+        // A script that creates an external <script>, appends it, then attaches
+        // both onload and addEventListener('load') after appendChild returns.
+        // Browsers execute appended scripts asynchronously, so this pattern is
+        // common. Our engine must defer execution until after appendChild returns
+        // and then fire both handlers.
+        let script = r#"
+            var target = document.getElementById('target');
+            var s = document.createElement('script');
+            // Use a data URL so the test has no network dependency.
+            s.setAttribute('src', 'data:application/javascript,window.__fakeChunkLoaded=1;');
+            target.appendChild(s);
+            s.onload = function(ev) { window.inlineOnloadFired = !!(ev && ev.type === 'load'); };
+            s.addEventListener('load', function(ev) { window.listenerFired = !!(ev && ev.type === 'load'); });
+            // The script is executed after appendChild returns, so read the flags
+            // in a microtask-flushed timeout after the handlers have fired.
+            setTimeout(function() {
+                document.body.setAttribute('data-test-result', JSON.stringify({
+                    inlineOnloadFired: window.inlineOnloadFired,
+                    listenerFired: window.listenerFired,
+                    fakeChunkLoaded: window.__fakeChunkLoaded
+                }));
+            }, 0);
+        "#;
+        let entry = super::super::ScriptEntry {
+            source: script.to_string(),
+            origin: "inline".to_string(),
+            module: false,
+        };
+        let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
+        let body_id = out.body().expect("body");
+        let body_el = &out.nodes[body_id].data;
+        let result_json = if let incognidium_dom::NodeData::Element(ref e) = body_el {
+            e.get_attr("data-test-result").expect("test result attr")
+        } else {
+            panic!("body not element");
+        };
+        let result: serde_json::Value = serde_json::from_str(result_json).unwrap();
+        assert!(
+            result["inlineOnloadFired"].as_bool().unwrap_or(false),
+            "inline onload should fire"
+        );
+        assert!(
+            result["listenerFired"].as_bool().unwrap_or(false),
+            "addEventListener load should fire"
+        );
+        assert_eq!(
+            result["fakeChunkLoaded"].as_i64(),
+            Some(1),
+            "data URL script body should have executed"
+        );
+        // The fake script should have been appended as a real child of target.
+        let target_id = out
+            .nodes
+            .iter()
+            .find(|n| {
+                if let incognidium_dom::NodeData::Element(ref e) = n.data {
+                    e.get_attr("id").as_deref() == Some("target")
+                } else {
+                    false
+                }
+            })
+            .map(|n| n.id)
+            .expect("target div");
+        let has_script_child = out.nodes[target_id].children.iter().any(|&cid| {
+            matches!(out.nodes[cid].data, incognidium_dom::NodeData::Element(ref e) if e.tag_name == "script")
+        });
+        assert!(
+            has_script_child,
+            "appended script node should be in DOM tree"
+        );
+    }
+
+    #[test]
+    fn async_loader_retry_patch_loads_after_delayed_addloaders() {
+        let html = r##"
+            <!doctype html>
+            <html><body>
+                <x-async-loader bundle="menu" id="l1"></x-async-loader>
+            </body></html>
+        "##;
+        let doc = incognidium_html::parse_html(html);
+        let script = r##"
+            class XAsyncLoader extends HTMLElement {
+                static Loaders = new Map();
+                static addLoaders(map) {
+                    for (const [k, v] of Object.entries(map)) XAsyncLoader.Loaders.set(k, v);
+                }
+                connectedCallback() { this._loaded = false; this.load(); }
+                async load() {
+                    if (this._loaded) return;
+                    const fn = XAsyncLoader.Loaders.get(this.getAttribute('bundle'));
+                    if (!fn) { this._loaded = true; throw new Error('no loader'); }
+                    const mod = await fn();
+                    this._loaded = true;
+                    const shadow = this.attachShadow({ mode: 'open' });
+                    const d = document.createElement('div');
+                    d.id = 'loaded-widget';
+                    d.textContent = mod.text;
+                    shadow.appendChild(d);
+                }
+            }
+            customElements.define('x-async-loader', XAsyncLoader);
+            setTimeout(function() {
+                XAsyncLoader.addLoaders({
+                    menu: function() { return Promise.resolve({ text: 'Menu Widget' }); }
+                });
+            }, 10);
+        "##;
+        let entry = super::super::ScriptEntry {
+            source: script.to_string(),
+            origin: "inline".to_string(),
+            module: false,
+        };
+        let out = execute_scripts_v8(doc, &[entry], 1024.0, 768.0);
+        let html = serialize_document_to_html(&out);
+        assert!(
+            html.contains("Menu Widget"),
+            "delayed addLoaders retry should render the widget: {}",
+            html
+        );
+        assert!(
+            html.contains("id=\"loaded-widget\""),
+            "widget element should be in serialized shadow content: {}",
+            html
+        );
+    }
+
+    #[test]
+    fn module_source_to_cjs_preserves_string_with_export() {
+        let src = "var x = 'export default'; export const x = 1;";
+        let out = module_source_to_cjs(src);
+        assert!(out.contains("'export default'"));
+        assert!(out.contains("const x = 1;"));
+        assert!(out.contains("exports.x = x;"));
+    }
+
+    #[test]
+    fn test_serialize_includes_shadow_root_children() {
+        use incognidium_dom::{Document, ElementData, NodeData, TextData};
+        let mut doc = Document::new();
+        let host = doc.add_node(doc.root(), NodeData::Element(ElementData::new("x-post")));
+        let shadow = doc.add_node(host, NodeData::Element(ElementData::new("#shadow-root")));
+        if let NodeData::Element(el) = &mut doc.nodes[host].data {
+            el.shadow_root = Some(shadow);
+        }
+        doc.nodes[shadow].parent = Some(host);
+        let _title = doc.add_node(
+            shadow,
+            NodeData::Text(TextData {
+                content: "Hello from shadow".to_string(),
+            }),
+        );
+        let _light = doc.add_node(
+            host,
+            NodeData::Text(TextData {
+                content: "Light content".to_string(),
+            }),
+        );
+
+        let html = serialize_document_to_html(&doc);
+        let host_open = html.find("<x-post>").unwrap();
+        let host_close = html.find("</x-post>").unwrap();
+        let host_html = &html[host_open..host_close + 8];
+        assert!(
+            host_html.contains("Hello from shadow"),
+            "shadow content should be serialized: {}",
+            host_html
+        );
+        assert!(
+            host_html.contains("Light content"),
+            "light content should still be serialized: {}",
+            host_html
+        );
+        // Shadow content appears before light content.
+        let shadow_idx = host_html.find("Hello from shadow").unwrap();
+        let light_idx = host_html.find("Light content").unwrap();
+        assert!(
+            shadow_idx < light_idx,
+            "shadow content should precede light content"
+        );
+    }
 }

@@ -7841,8 +7841,10 @@ fn compute_style_for_element(
         });
         if !has_not_sr_only {
             for c in &classes {
-                match *c {
-                    "sr-only" | "visually-hidden" | "screen-reader-text" | "skip-link" => {
+                let suffix = c.split(':').next_back().unwrap_or(c);
+                match suffix {
+                    "sr-only" | "invisible" | "visually-hidden" | "screen-reader-text"
+                    | "skip-link" => {
                         style.display = Display::None;
                         break;
                     }
@@ -7852,25 +7854,7 @@ fn compute_style_for_element(
         }
     }
 
-    // HTML custom elements (tag names containing a hyphen) default to inline in
-    // the spec, but real-world web components are almost always block-level
-    // layout roots. If no rule explicitly set `display` for a custom element,
-    // default it to block so sites built from components (Reddit, etc.) render
-    // instead of collapsing to zero height.
-    let display_explicitly_set = ua_matched
-        .iter()
-        .chain(all_matched.iter())
-        .flat_map(|m| m.rule.declarations.iter())
-        .chain(inline_decls.iter())
-        .any(|d| d.property == "display" && !matches!(d.value, incognidium_css::CssValue::Inherit));
-    if !display_explicitly_set
-        && element.tag_name.as_str().contains('-')
-        && style.display == Display::Inline
-    {
-        style.display = Display::Block;
-    }
-
-    // Utility-first frameworks (Tailwind, Reddit) frequently use bare
+    // Utility-first frameworks (Tailwind, etc.) frequently use bare
     // `display: grid` as a flex-like full-width row wrapper, leaving track
     // definitions in classes we do not fully parse. The layout engine treats
     // that as a valid single implicit column whose auto track is sized to the
@@ -7917,6 +7901,23 @@ fn compute_style_for_element(
             Display::InlineFlex => Display::Flex,
             other => other,
         };
+    }
+
+    // Custom elements (tag names with a hyphen) default to block-level layout
+    // roots in practice. Apply this AFTER all heuristics so client-rendered web
+    // component shells are not pruned before their JS-generated children are
+    // considered, while still respecting explicit `display:none` rules.
+    let display_explicitly_set = ua_matched
+        .iter()
+        .chain(all_matched.iter())
+        .flat_map(|m| m.rule.declarations.iter())
+        .chain(inline_decls.iter())
+        .any(|d| d.property == "display" && !matches!(d.value, incognidium_css::CssValue::Inherit));
+    if !display_explicitly_set
+        && element.tag_name.as_str().contains('-')
+        && style.display != Display::None
+    {
+        style.display = Display::Block;
     }
 
     style
@@ -29425,13 +29426,35 @@ mod tests {
             );
         }
         // Custom elements (web components) are deliberately different: without an
-        // explicit display they default to Block so component-based sites (Reddit
-        // and similar) render as layout roots instead of collapsing to zero height.
+        // explicit display they default to Block so component-based sites render
+        // as layout roots instead of collapsing to zero height.
         let custom_style = styles.get(&custom).unwrap();
         assert!(
             matches!(custom_style.display, Display::Block),
             "custom-element should default to block, got {:?}",
             custom_style.display
+        );
+    }
+
+    #[test]
+    fn test_custom_element_not_pruned_when_empty() {
+        // Web-component hosts are often populated by JS after the page loads, so
+        // at style-resolution time they may have no text or visual descendants.
+        // A pruning heuristic that hides "empty" subtrees must not make them
+        // display:none, otherwise client-rendered apps collapse entirely.
+        use incognidium_css::parse_css;
+        let mut doc = Document::new();
+        let html = doc.add_node(0, NodeData::Element(ElementData::new("html")));
+        let body = doc.add_node(html, NodeData::Element(ElementData::new("body")));
+        let feed = doc.add_node(body, NodeData::Element(ElementData::new("x-feed")));
+        let _post = doc.add_node(feed, NodeData::Element(ElementData::new("x-post")));
+        let empty = parse_css("");
+        let styles = resolve_styles(&doc, &empty, 1024.0, 768.0);
+        let feed_style = styles.get(&feed).expect("x-feed style missing");
+        assert_eq!(
+            feed_style.display,
+            Display::Block,
+            "x-feed should stay block even when no text/visual descendants are present yet"
         );
     }
 

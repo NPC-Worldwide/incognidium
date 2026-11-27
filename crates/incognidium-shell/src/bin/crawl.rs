@@ -15,13 +15,14 @@ use std::io::Write;
 use incognidium_css::parse_css;
 use incognidium_html::parse_html;
 use incognidium_layout::{flatten_layout, layout_with_images, ImageSizes};
-use incognidium_net::{fetch_url, resolve_url};
+use incognidium_net::{fetch_url, fetch_with_options, resolve_url};
 use incognidium_paint::{paint_with_images_and_canvas, ImageData};
 use incognidium_style::resolve_styles;
 
 use incognidium_shell::{
-    collect_scripts, encode_png_compressed, execute_scripts_on_doc, fetch_background_images,
-    fetch_document_images, propagate_canvas_background,
+    collect_scripts, encode_png_compressed, engine_bridge::take_pending_form_submission,
+    execute_scripts_on_doc, fetch_background_images, fetch_document_images,
+    form_submission_to_fetch_request, propagate_canvas_background,
 };
 
 fn main() {
@@ -148,24 +149,52 @@ struct CrawledPage {
 }
 
 fn crawl_page(url: &str) -> Result<CrawledPage, String> {
-    let resp = fetch_url(url).map_err(|e| format!("fetch: {}", e))?;
-    let doc = parse_html(&resp.body);
-    let dom_nodes = doc.nodes.len();
-
-    // JS execution
+    // Some sites serve a JS-challenge interstitial. Solve it and follow the
+    // resulting form submission so headless crawling sees the real page,
+    // matching the behavior of render_to_png / the GUI shell.
+    let mut resp = incognidium_shell::fetch_solving_challenges_engine(url)
+        .map_err(|e| format!("fetch: {}", e))?;
+    let mut base_url = resp.url.clone();
+    const MAX_FORM_NAVIGATIONS: usize = 3;
+    let mut nav_count = 0usize;
     let mut inline_svg_cache: HashMap<String, ImageData> = HashMap::new();
-    let scripts = collect_scripts(&doc, url);
-    let doc = if !scripts.is_empty() {
-        execute_scripts_on_doc(doc, &scripts, &mut inline_svg_cache, url, 1024.0, 768.0)
-    } else {
-        doc
+
+    let doc = loop {
+        let doc = parse_html(&resp.body);
+        let scripts = collect_scripts(&doc, &base_url);
+        let modified_doc = if !scripts.is_empty() {
+            execute_scripts_on_doc(
+                doc,
+                &scripts,
+                &mut inline_svg_cache,
+                &base_url,
+                1024.0,
+                768.0,
+            )
+        } else {
+            doc
+        };
+
+        match take_pending_form_submission() {
+            Some(submission) if nav_count < MAX_FORM_NAVIGATIONS => {
+                nav_count += 1;
+                let request = form_submission_to_fetch_request(&submission, &base_url)
+                    .map_err(|e| format!("form submission request: {}", e))?;
+                resp = fetch_with_options(request).map_err(|e| format!("form fetch: {}", e))?;
+                base_url = resp.url.clone();
+                continue;
+            }
+            Some(_) => break modified_doc,
+            None => break modified_doc,
+        }
     };
+    let dom_nodes = doc.nodes.len();
 
     // Extract title
     let title = extract_title(&doc);
 
     // External CSS
-    let mut css_text = fetch_external_css_for_doc(&doc, url);
+    let mut css_text = fetch_external_css_for_doc(&doc, &base_url);
     let css_bytes = css_text.len();
     // crawl.rs executes scripts, so skip no-script-only styles.
     css_text.push_str(&doc.collect_style_text_skip_noscript());
@@ -180,10 +209,10 @@ fn crawl_page(url: &str) -> Result<CrawledPage, String> {
     // engine knows intrinsic sizes and the paint engine can draw them.
     let mut image_cache: HashMap<String, ImageData> = HashMap::new();
     image_cache.extend(inline_svg_cache);
-    for (src, img) in fetch_document_images(&doc, url) {
+    for (src, img) in fetch_document_images(&doc, &base_url) {
         image_cache.insert(src, img);
     }
-    for (src, img) in fetch_background_images(&styles, url) {
+    for (src, img) in fetch_background_images(&styles, &base_url) {
         image_cache.insert(src, img);
     }
 
